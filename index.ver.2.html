@@ -1,0 +1,1211 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no"/>
+  <meta name="mobile-web-app-capable" content="yes"/>
+  <meta name="apple-mobile-web-app-capable" content="yes"/>
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+  <meta name="apple-mobile-web-app-title" content="QuestLife"/>
+  <meta name="theme-color" content="#2D4A1E"/>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+  <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet"/>
+  <title>QuestLife ⚔️</title>
+  <style>
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
+    html,body{height:100%;background:#1A2E0A;overflow:hidden;}
+    #root{height:100%;overflow-y:auto;-webkit-overflow-scrolling:touch;}
+    body{
+      padding-top:env(safe-area-inset-top);
+      padding-bottom:env(safe-area-inset-bottom);
+    }
+  </style>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel" data-presets="react">
+    const { useState, useRef, useEffect } = React;
+
+
+
+
+
+
+const PX = { fontFamily:"'Press Start 2P',monospace" };
+
+// ═══ サウンドエンジン（Web Audio API）═══
+const _audioCtxRef = { current: null };
+function getAudioCtx() {
+  if (!_audioCtxRef.current) {
+    try { _audioCtxRef.current = new (window.AudioContext || window.webkitAudioContext)(); } catch(e) {}
+  }
+  return _audioCtxRef.current;
+}
+function beep(freq, duration, type="square", volume=0.18, startDelay=0) {
+  const ctx = getAudioCtx(); if (!ctx) return;
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.connect(gain); gain.connect(ctx.destination);
+  osc.type = type;
+  osc.frequency.setValueAtTime(freq, ctx.currentTime + startDelay);
+  gain.gain.setValueAtTime(volume, ctx.currentTime + startDelay);
+  gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + startDelay + duration);
+  osc.start(ctx.currentTime + startDelay);
+  osc.stop(ctx.currentTime + startDelay + duration + 0.02);
+}
+// 通常チェック音（ピコッ↑）
+function soundCheck() {
+  beep(660, 0.05, "square", 0.14, 0);
+  beep(880, 0.08, "square", 0.12, 0.055);
+  beep(1100, 0.06, "square", 0.10, 0.12);
+}
+// アンチェック音（ポフッ↓）
+function soundUncheck() {
+  beep(440, 0.06, "square", 0.10, 0);
+  beep(330, 0.08, "square", 0.08, 0.055);
+}
+// 毎日ボーナス音（ファンファーレ！）
+function soundDailyBonus() {
+  [523,659,784,1047].forEach((f,i) => beep(f, 0.13, "square", 0.16, i*0.09));
+  beep(2093, 0.07, "sine", 0.10, 0.40);
+  beep(2637, 0.10, "sine", 0.08, 0.46);
+}
+// ペナルティ音（ブブー）
+function soundPenalty() {
+  beep(220, 0.12, "sawtooth", 0.15, 0);
+  beep(180, 0.15, "sawtooth", 0.12, 0.11);
+}
+// 警告音（ピピッ）
+function soundWarn() {
+  beep(660, 0.04, "square", 0.12, 0);
+  beep(660, 0.04, "square", 0.10, 0.09);
+}
+
+const C = {
+  skyTop:"#5B8DD9", skyMid:"#7EC8E3", skyHorizon:"#B8E0F7",
+  grassDark:"#2D6A2D", grass:"#3D8B3D", grassLight:"#5AAA5A",
+  ground:"#8B6914", groundDark:"#6B4F10",
+  mtn1:"#4A7C59", mtn2:"#3A6B48", mtnSnow:"#E8F4F8",
+  cloud:"#FFFFFF", cloudShadow:"#C8DCF0",
+  panel:"#FDFCF0", panelAlt:"#F0EDD8",
+  border:"#2D4A1E", borderMid:"#4A7A2E", borderLight:"#7AAA4E",
+  text:"#1A2E0A", textMuted:"#4A6A2A", textLight:"#8AAA6A",
+  white:"#FFFFFF",
+  physical:"#C0392B", physicalBg:"#FDECEA",
+  knowledge:"#1A5276", knowledgeBg:"#EAF2FF",
+  tech:"#6C3483", techBg:"#F5EEF8",
+  creative:"#B03A7A", creativeBg:"#FDEEF6",
+  social:"#D4750A", socialBg:"#FEF5E7",
+  daily:"#1E6B2E", dailyBg:"#EAFAF1",
+  xpColor:"#1A5276", gold:"#D4AC0D",
+  green:"#1E6B2E", red:"#B03000",
+};
+
+// ═══ シーン定義（各シーンはSVG width=960, height=80 の横長キャンバス）
+// スクロールで左に流れるので、幅を2倍にして seamless loop
+
+// ── シーン1: 山と草原（オリジナル）──
+function SceneMountain({ offset }) {
+  const w = 960;
+  return (
+    <g transform={`translate(${-offset % w},0)`}>
+      {[0, w].map(dx => (
+        <g key={dx} transform={`translate(${dx},0)`}>
+          {/* 空 */}
+          <rect x="0" y="0" width={w} height="80" fill={C.skyTop}/>
+          <rect x="0" y="30" width={w} height="50" fill={C.skyMid}/>
+          <rect x="0" y="55" width={w} height="25" fill={C.skyHorizon}/>
+          {/* 雲 */}
+          {[[20,8],[160,5],[360,10],[520,7],[700,6],[860,9]].map(([x,y],i)=>(
+            <g key={i}>
+              <rect x={x} y={y} width="10" height="4" fill={C.cloud}/>
+              <rect x={x-4} y={y+2} width="24" height="7" fill={C.cloud}/>
+              <rect x={x-2} y={y+9} width="20" height="3" fill={C.cloudShadow}/>
+            </g>
+          ))}
+          {/* 太陽 */}
+          <rect x="870" y="6" width="16" height="16" fill="#FFD700"/>
+          <rect x="868" y="8" width="20" height="12" fill="#FFD700"/>
+          <rect x="872" y="4" width="12" height="20" fill="#FFD700"/>
+          {/* 山々 */}
+          <polygon points="0,58 80,14 160,58" fill={C.mtn2}/>
+          <polygon points="80,14 100,26 80,26" fill={C.mtnSnow}/>
+          <polygon points="140,58 240,8 340,58" fill={C.mtn1}/>
+          <polygon points="240,8 265,28 215,28" fill={C.mtnSnow}/>
+          <polygon points="300,58 380,20 460,58" fill={C.mtn2}/>
+          <polygon points="380,20 398,32 380,32" fill={C.mtnSnow}/>
+          <polygon points="520,58 620,10 720,58" fill={C.mtn1}/>
+          <polygon points="620,10 645,28 595,28" fill={C.mtnSnow}/>
+          <polygon points="700,58 780,22 860,58" fill={C.mtn2}/>
+          <polygon points="780,22 798,34 780,34" fill={C.mtnSnow}/>
+          {/* 草原 */}
+          <rect x="0" y="56" width={w} height="4" fill={C.grassDark}/>
+          <rect x="0" y="60" width={w} height="6" fill={C.grass}/>
+          <rect x="0" y="66" width={w} height="4" fill={C.grassLight}/>
+          <rect x="0" y="70" width={w} height="10" fill={C.ground}/>
+          {/* 木 */}
+          {[68,200,440,600,800].map((tx,i)=>(
+            <g key={i}>
+              <rect x={tx} y="44" width="4" height="14" fill={C.groundDark}/>
+              <rect x={tx-8} y="30" width="20" height="18" fill={C.grassDark}/>
+              <rect x={tx-6} y="26" width="16" height="8" fill={C.grass}/>
+              <rect x={tx-2} y="22" width="8" height="8" fill={C.grassLight}/>
+            </g>
+          ))}
+          {/* 草 */}
+          {[10,40,90,150,210,280,350,430,510,580,650,730,810,890].map((x,i)=>(
+            <g key={i}>
+              <rect x={x} y="58" width="2" height="4" fill={C.grassLight}/>
+              <rect x={x+4} y="57" width="2" height="5" fill={C.grassDark}/>
+            </g>
+          ))}
+        </g>
+      ))}
+    </g>
+  );
+}
+
+// ── シーン2: 海 ──
+function SceneOcean({ offset }) {
+  const w = 960;
+  return (
+    <g transform={`translate(${-offset % w},0)`}>
+      {[0, w].map(dx => (
+        <g key={dx} transform={`translate(${dx},0)`}>
+          {/* 空（夕方） */}
+          <rect x="0" y="0" width={w} height="80" fill="#E87C3E"/>
+          <rect x="0" y="20" width={w} height="40" fill="#F4A460"/>
+          <rect x="0" y="50" width={w} height="30" fill="#FFD580"/>
+          {/* 太陽 */}
+          <rect x="440" y="8" width="20" height="20" fill="#FF6B00"/>
+          <rect x="437" y="11" width="26" height="14" fill="#FF6B00"/>
+          <rect x="443" y="5" width="14" height="26" fill="#FF6B00"/>
+          {/* 光の道 */}
+          <rect x="440" y="54" width="20" height="2" fill="#FFE88055"/>
+          <rect x="430" y="56" width="40" height="2" fill="#FFE88055"/>
+          <rect x="420" y="58" width="60" height="2" fill="#FFE88055"/>
+          {/* 雲 */}
+          {[[60,12],[280,8],[600,10],[800,7]].map(([x,y],i)=>(
+            <g key={i}>
+              <rect x={x} y={y} width="12" height="5" fill="#FFCBA4AA"/>
+              <rect x={x-6} y={y+3} width="30" height="8" fill="#FFCBA4AA"/>
+              <rect x={x-4} y={y+11} width="24" height="3" fill="#FF8C6088"/>
+            </g>
+          ))}
+          {/* 海（地平線） */}
+          <rect x="0" y="54" width={w} height="2" fill="#1A6B9A"/>
+          <rect x="0" y="56" width={w} height="4" fill="#1E7AAD"/>
+          <rect x="0" y="60" width={w} height="5" fill="#2490CC"/>
+          <rect x="0" y="65" width={w} height="5" fill="#1E88BE"/>
+          <rect x="0" y="70" width={w} height="10" fill="#1A7AAD"/>
+          {/* 波 */}
+          {[0,80,160,240,320,400,480,560,640,720,800,880].map((wx,i)=>(
+            <g key={i}>
+              <rect x={wx} y="57" width="30" height="2" fill="#FFFFFF55"/>
+              <rect x={wx+40} y="62" width="24" height="2" fill="#FFFFFF44"/>
+              <rect x={wx+10} y="67" width="20" height="2" fill="#FFFFFF33"/>
+            </g>
+          ))}
+          {/* 船 */}
+          <rect x="700" y="50" width="30" height="4" fill="#8B4513"/>
+          <rect x="713" y="34" width="2" height="18" fill="#5C3317"/>
+          <rect x="715" y="34" width="14" height="10" fill="#FFFFFF"/>
+          <rect x="710" y="52" width="40" height="4" fill="#6B3410"/>
+          {/* 砂浜 */}
+          <rect x="0" y="70" width={w} height="10" fill="#D4B483"/>
+          {[20,80,150,230,310,390,470,550,630,710,790,870].map((sx,i)=>(
+            <rect key={i} x={sx} y="71" width="4" height="2" fill="#C8A870"/>
+          ))}
+          {/* カモメ */}
+          {[[200,18],[220,16],[380,20],[600,14],[620,12]].map(([bx,by],i)=>(
+            <g key={i}>
+              <rect x={bx} y={by} width="4" height="2" fill="#334"/>
+              <rect x={bx+6} y={by} width="4" height="2" fill="#334"/>
+              <rect x={bx+2} y={by-2} width="6" height="2" fill="#334"/>
+            </g>
+          ))}
+        </g>
+      ))}
+    </g>
+  );
+}
+
+// ── シーン3: 花畑 ──
+function SceneFlower({ offset }) {
+  const w = 960;
+  const flowers = [
+    [20,"#FF6B9D"],[45,"#FFD700"],[70,"#FF6B9D"],[95,"#9B59B6"],[120,"#FF4444"],
+    [145,"#FFD700"],[170,"#FF6B9D"],[195,"#4CAF50"],[220,"#FF6B9D"],[245,"#FFD700"],
+    [270,"#9B59B6"],[295,"#FF4444"],[320,"#FFD700"],[345,"#FF6B9D"],[370,"#9B59B6"],
+    [395,"#FF4444"],[420,"#FFD700"],[445,"#FF6B9D"],[470,"#4CAF50"],[495,"#FFD700"],
+    [520,"#FF6B9D"],[545,"#9B59B6"],[570,"#FF4444"],[595,"#FFD700"],[620,"#FF6B9D"],
+    [645,"#4CAF50"],[670,"#FFD700"],[695,"#FF6B9D"],[720,"#9B59B6"],[745,"#FF4444"],
+    [770,"#FFD700"],[795,"#FF6B9D"],[820,"#4CAF50"],[845,"#FFD700"],[870,"#FF6B9D"],
+    [895,"#9B59B6"],[920,"#FF4444"],[945,"#FFD700"],
+  ];
+  return (
+    <g transform={`translate(${-offset % w},0)`}>
+      {[0, w].map(dx => (
+        <g key={dx} transform={`translate(${dx},0)`}>
+          {/* 空（春） */}
+          <rect x="0" y="0" width={w} height="80" fill="#87CEEB"/>
+          <rect x="0" y="35" width={w} height="45" fill="#A8E6CF"/>
+          {/* ふわふわ雲 */}
+          {[[40,6],[200,4],[420,8],[620,5],[800,7]].map(([x,y],i)=>(
+            <g key={i}>
+              <rect x={x} y={y} width="16" height="6" fill="#FFFFFF"/>
+              <rect x={x-6} y={y+3} width="32" height="8" fill="#FFFFFF"/>
+              <rect x={x-2} y={y+11} width="26" height="4" fill="#E8F4FF"/>
+              <rect x={x+4} y={y+2} width="10" height="4" fill="#FFFFFF"/>
+            </g>
+          ))}
+          {/* 遠景の丘 */}
+          <ellipse cx="200" cy="56" rx="180" ry="20" fill="#5CB85C"/>
+          <ellipse cx="600" cy="58" rx="200" ry="18" fill="#4CAF50"/>
+          <ellipse cx="900" cy="56" rx="150" ry="18" fill="#5CB85C"/>
+          {/* 地面 */}
+          <rect x="0" y="56" width={w} height="4" fill="#4CAF50"/>
+          <rect x="0" y="60" width={w} height="6" fill="#66BB6A"/>
+          <rect x="0" y="66" width={w} height="4" fill="#81C784"/>
+          <rect x="0" y="70" width={w} height="10" fill="#A5D6A7"/>
+          {/* 花 */}
+          {flowers.map(([fx,fc],i)=>(
+            <g key={i}>
+              <rect x={fx+1} y="56" width="2" height="10" fill="#388E3C"/>
+              <rect x={fx} y="52" width="4" height="4" fill={fc}/>
+              <rect x={fx-2} y="54" width="8" height="2" fill={fc}/>
+              <rect x={fx+1} y="51" width="2" height="2" fill="#FFE082"/>
+            </g>
+          ))}
+          {/* 蝶 */}
+          {[[150,30],[350,25],[550,28],[750,26],[920,32]].map(([bx,by],i)=>(
+            <g key={i}>
+              <rect x={bx} y={by} width="6" height="4" fill="#FF99CC"/>
+              <rect x={bx+8} y={by} width="6" height="4" fill="#FF99CC"/>
+              <rect x={bx+3} y={by+1} width="2" height="6" fill="#553344"/>
+            </g>
+          ))}
+          {/* 太陽（明るい春） */}
+          <rect x="860" y="4" width="14" height="14" fill="#FFE55C"/>
+          <rect x="858" y="7" width="18" height="8" fill="#FFE55C"/>
+          <rect x="863" y="2" width="8" height="18" fill="#FFE55C"/>
+        </g>
+      ))}
+    </g>
+  );
+}
+
+// ── シーン4: 川と森 ──
+function SceneRiver({ offset }) {
+  const w = 960;
+  return (
+    <g transform={`translate(${-offset % w},0)`}>
+      {[0, w].map(dx => (
+        <g key={dx} transform={`translate(${dx},0)`}>
+          {/* 空（緑） */}
+          <rect x="0" y="0" width={w} height="80" fill="#4682B4"/>
+          <rect x="0" y="25" width={w} height="55" fill="#87CEEB"/>
+          {/* 雲 */}
+          {[[30,6],[230,4],[500,8],[730,5],[900,9]].map(([x,y],i)=>(
+            <g key={i}>
+              <rect x={x} y={y} width="14" height="5" fill="#FFFFFF"/>
+              <rect x={x-5} y={y+3} width="28" height="7" fill="#FFFFFF"/>
+              <rect x={x-2} y={y+10} width="22" height="3" fill="#DDEEFF"/>
+            </g>
+          ))}
+          {/* 奥の木々 */}
+          {[0,60,130,200,270,340,420,500,580,660,740,820,880].map((tx,i)=>(
+            <g key={i}>
+              <rect x={tx} y="30" width="4" height="26" fill="#5D4037"/>
+              <rect x={tx-10} y="16" width="24" height="22" fill="#2E7D32"/>
+              <rect x={tx-6} y="10" width="16" height="10" fill="#388E3C"/>
+              <rect x={tx-2} y="6" width="8" height="8" fill="#43A047"/>
+            </g>
+          ))}
+          {/* 地面（草） */}
+          <rect x="0" y="54" width={w} height="4" fill="#2E7D32"/>
+          {/* 川 */}
+          <rect x="0" y="58" width={w} height="12" fill="#1E88E5"/>
+          <rect x="0" y="60" width={w} height="2" fill="#42A5F5"/>
+          <rect x="0" y="64" width={w} height="2" fill="#1565C0"/>
+          {/* 川の波紋 */}
+          {[0,80,160,240,320,400,480,560,640,720,800,880].map((wx,i)=>(
+            <g key={i}>
+              <rect x={wx} y="59" width="40" height="1" fill="#64B5F688"/>
+              <rect x={wx+20} y="63" width="30" height="1" fill="#64B5F655"/>
+              <rect x={wx+5} y="67" width="35" height="1" fill="#64B5F644"/>
+            </g>
+          ))}
+          {/* 川岸 */}
+          <rect x="0" y="70" width={w} height="10" fill="#8D6E63"/>
+          {/* 岸の石 */}
+          {[15,60,110,160,210,270,330,390,450,520,580,650,720,790,850,910].map((sx,i)=>(
+            <g key={i}>
+              <rect x={sx} y="71" width="6" height="4" fill="#757575"/>
+              <rect x={sx+2} y="70" width="4" height="2" fill="#9E9E9E"/>
+            </g>
+          ))}
+          {/* 魚（水面ジャンプ） */}
+          <rect x="300" y="57" width="8" height="4" fill="#FF8F00"/>
+          <rect x="302" y="55" width="4" height="4" fill="#FF8F00"/>
+          <rect x="600" y="58" width="8" height="4" fill="#FF8F00"/>
+        </g>
+      ))}
+    </g>
+  );
+}
+
+// ── シーン5: 洞窟 ──
+function SceneCave({ offset }) {
+  const w = 960;
+  return (
+    <g transform={`translate(${-offset % w},0)`}>
+      {[0, w].map(dx => (
+        <g key={dx} transform={`translate(${dx},0)`}>
+          {/* 暗い洞窟の奥 */}
+          <rect x="0" y="0" width={w} height="80" fill="#0D0D1A"/>
+          <rect x="0" y="0" width={w} height="40" fill="#12162A"/>
+          {/* 洞窟の天井（不規則な岩） */}
+          <polygon points="0,0 0,20 40,12 80,22 120,8 160,18 200,6 240,16 280,4 320,14 360,6 400,20 440,10 480,18 520,2 560,16 600,8 640,20 680,12 720,22 760,8 800,18 840,6 880,14 920,4 960,16 960,0" fill="#1A1A2E"/>
+          {/* 鍾乳石（天井から） */}
+          {[30,90,150,210,280,360,440,520,600,680,760,840,920].map((sx,i)=>(
+            <g key={i}>
+              <polygon points={`${sx},16 ${sx+4},16 ${sx+2},${28+i%3*4}`} fill="#2A2A4A"/>
+              <polygon points={`${sx+1},16 ${sx+3},16 ${sx+2},${26+i%3*4}`} fill="#3A3A5A"/>
+            </g>
+          ))}
+          {/* 地面の石柱（石筍） */}
+          {[50,130,220,340,460,560,660,780,890].map((sx,i)=>(
+            <g key={i}>
+              <polygon points={`${sx},80 ${sx+6},80 ${sx+3},${60-i%4*5}`} fill="#2A2A4A"/>
+              <polygon points={`${sx+1},80 ${sx+5},80 ${sx+3},${62-i%4*5}`} fill="#3A3A5A"/>
+            </g>
+          ))}
+          {/* 地面 */}
+          <rect x="0" y="68" width={w} height="12" fill="#1A1A2E"/>
+          <rect x="0" y="68" width={w} height="2" fill="#2A2A4A"/>
+          {/* 地面の石 */}
+          {[10,50,100,170,240,320,410,490,570,650,730,810,890].map((sx,i)=>(
+            <g key={i}>
+              <rect x={sx} y="69" width="8" height="4" fill="#242438"/>
+              <rect x={sx+2} y="68" width="5" height="2" fill="#2E2E48"/>
+            </g>
+          ))}
+          {/* 輝くクリスタル */}
+          {[[80,50,"#00FFAA"],[200,44,"#FF88FF"],[380,48,"#FFFF44"],[560,46,"#88CCFF"],[720,50,"#FF8844"],[880,44,"#88FF88"]].map(([cx,cy,cc],i)=>(
+            <g key={i}>
+              <polygon points={`${cx},${cy} ${cx+4},${cy+6} ${cx+8},${cy} ${cx+4},${cy-6}`} fill={cc+"88"}/>
+              <polygon points={`${cx+2},${cy} ${cx+4},${cy+4} ${cx+6},${cy}`} fill={cc}/>
+              <rect x={cx+3} y={cy-2} width="2" height="2" fill="#FFFFFF"/>
+            </g>
+          ))}
+          {/* コウモリ */}
+          {[[120,10],[300,8],[480,12],[700,9],[850,11]].map(([bx,by],i)=>(
+            <g key={i}>
+              <rect x={bx} y={by} width="8" height="3" fill="#330044"/>
+              <rect x={bx+10} y={by} width="8" height="3" fill="#330044"/>
+              <rect x={bx+4} y={by+2} width="4" height="4" fill="#220033"/>
+            </g>
+          ))}
+          {/* 光の入り口（遠景） */}
+          <rect x="430" y="0" width="100" height="40" fill="#15304A44"/>
+          <rect x="450" y="0" width="60" height="20" fill="#1A3A5A55"/>
+          {/* 光のゆらぎ */}
+          <rect x="460" y="30" width="40" height="1" fill="#FFFFFF22"/>
+          <rect x="455" y="35" width="50" height="1" fill="#FFFFFF18"/>
+          <rect x="450" y="40" width="60" height="1" fill="#FFFFFF14"/>
+          {/* 地面の水たまり（反射） */}
+          <rect x="380" y="70" width="60" height="6" fill="#0A1428"/>
+          <rect x="382" y="71" width="56" height="2" fill="#1A2438"/>
+          <rect x="650" y="70" width="80" height="6" fill="#0A1428"/>
+        </g>
+      ))}
+    </g>
+  );
+}
+
+// ── シーン6: 夜空と雪原 ──
+function SceneSnow({ offset }) {
+  const w = 960;
+  const stars = [];
+  for (let i = 0; i < 60; i++) {
+    stars.push([(i * 97 + 23) % w, (i * 53 + 7) % 45]);
+  }
+  return (
+    <g transform={`translate(${-offset % w},0)`}>
+      {[0, w].map(dx => (
+        <g key={dx} transform={`translate(${dx},0)`}>
+          {/* 夜空 */}
+          <rect x="0" y="0" width={w} height="80" fill="#0A0A1E"/>
+          <rect x="0" y="30" width={w} height="50" fill="#0E0E2A"/>
+          {/* 星 */}
+          {stars.map(([sx,sy],i)=>(
+            <rect key={i} x={sx} y={sy} width={i%5===0?2:1} height={i%5===0?2:1} fill={i%7===0?"#FFE082":"#FFFFFF"}/>
+          ))}
+          {/* 月 */}
+          <rect x="800" y="4" width="20" height="20" fill="#FFFDE7"/>
+          <rect x="796" y="8" width="28" height="12" fill="#FFFDE7"/>
+          <rect x="802" y="2" width="16" height="24" fill="#FFFDE7"/>
+          <rect x="806" y="6" width="6" height="6" fill="#ECEFF1AA"/>
+          <rect x="812" y="14" width="4" height="4" fill="#ECEFF1AA"/>
+          {/* 月明かり */}
+          <rect x="800" y="24" width="20" height="1" fill="#FFFDE744"/>
+          <rect x="795" y="26" width="30" height="1" fill="#FFFDE733"/>
+          {/* オーロラ */}
+          <rect x="0" y="5" width="200" height="4" fill="#00FF8822"/>
+          <rect x="50" y="8" width="300" height="3" fill="#88FF0022"/>
+          <rect x="200" y="4" width="200" height="5" fill="#0088FF22"/>
+          <rect x="500" y="6" width="200" height="4" fill="#FF00FF22"/>
+          <rect x="600" y="3" width="300" height="6" fill="#00FFFF18"/>
+          {/* 雪山 */}
+          <polygon points="0,58 100,18 200,58" fill="#263238"/>
+          <polygon points="100,18 130,30 70,30" fill="#ECEFF1"/>
+          <polygon points="150,58 260,12 370,58" fill="#37474F"/>
+          <polygon points="260,12 290,28 230,28" fill="#ECEFF1"/>
+          <polygon points="400,58 500,20 600,58" fill="#263238"/>
+          <polygon points="500,20 525,32 475,32" fill="#ECEFF1"/>
+          <polygon points="620,58 720,14 820,58" fill="#37474F"/>
+          <polygon points="720,14 748,28 692,28" fill="#ECEFF1"/>
+          <polygon points="830,58 910,22 960,48 960,58" fill="#263238"/>
+          {/* 雪原 */}
+          <rect x="0" y="56" width={w} height="4" fill="#B0BEC5"/>
+          <rect x="0" y="60" width={w} height="6" fill="#CFD8DC"/>
+          <rect x="0" y="66" width={w} height="4" fill="#ECEFF1"/>
+          <rect x="0" y="70" width={w} height="10" fill="#FFFFFF"/>
+          {/* 雪のテクスチャ */}
+          {[0,30,70,120,180,240,300,360,420,500,580,660,740,820,890].map((sx,i)=>(
+            <g key={i}>
+              <rect x={sx} y="61" width="4" height="2" fill="#ECEFF1"/>
+              <rect x={sx+8} y="63" width="3" height="2" fill="#B0BEC5"/>
+            </g>
+          ))}
+          {/* 雪の結晶（落下） */}
+          {[[100,50],[250,46],[430,52],[600,48],[780,50],[920,45]].map(([fx,fy],i)=>(
+            <g key={i}>
+              <rect x={fx} y={fy} width="2" height="6" fill="#FFFFFF88"/>
+              <rect x={fx-2} y={fy+2} width="6" height="2" fill="#FFFFFF88"/>
+            </g>
+          ))}
+        </g>
+      ))}
+    </g>
+  );
+}
+
+// ── アニメーション景観コンポーネント ──
+const SCENES = [
+  { id:"mountain", Component:SceneMountain, speed:0.8, tabBg:"#2D5A1E", tabActive:"#4A8A2E", accent:"#FFD700" },
+  { id:"ocean",    Component:SceneOcean,    speed:0.6, tabBg:"#1A3A5C", tabActive:"#2A5A8C", accent:"#FFB347" },
+  { id:"flower",   Component:SceneFlower,   speed:0.7, tabBg:"#6B2D6B", tabActive:"#9B4D9B", accent:"#FFE082" },
+  { id:"river",    Component:SceneRiver,    speed:0.9, tabBg:"#1A4A2E", tabActive:"#2A7A4E", accent:"#80DEEA" },
+  { id:"cave",     Component:SceneCave,     speed:0.5, tabBg:"#0D0D2A", tabActive:"#1A1A4A", accent:"#00FFAA" },
+  { id:"snow",     Component:SceneSnow,     speed:0.4, tabBg:"#1A2A3A", tabActive:"#2A3A5A", accent:"#B0E0FF" },
+];
+const SCENE_DURATION = 8000;
+
+function AnimatedLandscape({ onSceneChange }) {
+  const [sceneIdx, setSceneIdx] = useState(0);
+  const [fadeOut, setFadeOut] = useState(false);
+  const [offset, setOffset] = useState(0);
+  const rafRef = useRef(null);
+  const lastTimeRef = useRef(null);
+  const sceneTimerRef = useRef(null);
+
+  useEffect(() => {
+    const animate = (ts) => {
+      if (lastTimeRef.current === null) lastTimeRef.current = ts;
+      const dt = ts - lastTimeRef.current;
+      lastTimeRef.current = ts;
+      const speed = SCENES[sceneIdx].speed;
+      setOffset(prev => (prev + speed * dt * 0.05) % 960);
+      rafRef.current = requestAnimationFrame(animate);
+    };
+    rafRef.current = requestAnimationFrame(animate);
+    return () => cancelAnimationFrame(rafRef.current);
+  }, [sceneIdx]);
+
+  useEffect(() => {
+    sceneTimerRef.current = setInterval(() => {
+      setFadeOut(true);
+      setTimeout(() => {
+        setSceneIdx(prev => {
+          const next = (prev + 1) % SCENES.length;
+          onSceneChange && onSceneChange(next);
+          return next;
+        });
+        setOffset(0);
+        lastTimeRef.current = null;
+        setFadeOut(false);
+      }, 600);
+    }, SCENE_DURATION);
+    return () => clearInterval(sceneTimerRef.current);
+  }, []);
+
+  const scene = SCENES[sceneIdx];
+
+  return (
+    <div style={{ position:"relative", lineHeight:0, overflow:"hidden" }}>
+      <svg
+        width="480" height="80"
+        viewBox="0 0 480 80"
+        style={{
+          display:"block",
+          imageRendering:"pixelated",
+          opacity: fadeOut ? 0 : 1,
+          transition:"opacity 0.6s ease",
+          width:"100%",
+        }}
+        xmlns="http://www.w3.org/2000/svg"
+      >
+        <scene.Component offset={offset}/>
+      </svg>
+      {/* シーンドット（中央） */}
+      <div style={{
+        position:"absolute", bottom:4, left:"50%", transform:"translateX(-50%)",
+        display:"flex", gap:4,
+      }}>
+        {SCENES.map((s,i)=>(
+          <div key={s.id} style={{
+            width:4, height:4,
+            background: i===sceneIdx ? "#FFD700" : "#FFFFFF55",
+            border:"1px solid #FFFFFF44",
+          }}/>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── XPバー ──
+function SmoothBar({ current, total, color, height=14 }) {
+  const pct = Math.min((current / Math.max(total,1)) * 100, 100);
+  return (
+    <div style={{ position:"relative", background:"#C8D8B8", border:`2px solid ${C.border}`, height, overflow:"hidden" }}>
+      <div style={{
+        position:"absolute", top:0, left:0, height:"100%",
+        width:`${pct}%`,
+        background:color,
+        transition:"width 0.5s cubic-bezier(.4,0,.2,1)",
+        boxShadow:`inset 0 2px 0 ${color}AA`,
+      }}/>
+      <div style={{ position:"absolute", inset:0,
+        backgroundImage:"repeating-linear-gradient(90deg,transparent,transparent calc(10% - 1px),rgba(0,0,0,0.1) calc(10% - 1px),rgba(0,0,0,0.1) 10%)",
+      }}/>
+    </div>
+  );
+}
+
+const pb = (bc=C.border, bg=C.panel) => ({
+  background:bg, border:`3px solid ${bc}`, boxShadow:`4px 4px 0 ${bc}`,
+});
+
+function getLvInfo(xp) {
+  const x = Math.max(0, xp);
+  let lv=1, base=0;
+  while(true){
+    const need = 100+(lv-1)*50;
+    if(x < base+need) return { level:lv, currentXP:x-base, neededXP:need };
+    base += need; lv++;
+  }
+}
+function getCatLv(xp) {
+  const x=Math.max(0,xp), lv=Math.min(Math.floor(x/50)+1,99);
+  return { level:lv, currentXP:x%50, neededXP:50 };
+}
+
+const DEFAULT_CATS = [
+  { id:"physical", label:"体力", icon:"⚔️", color:C.physical, bg:C.physicalBg, missions:[
+    { id:"gym",    label:"ジムで筋トレ",   xp:10 },
+    { id:"sleep5", label:"睡眠5時間以下", xp:-10, penalty:true },
+    { id:"sleep7", label:"睡眠7時間達成", xp:10 },
+    { id:"sleep8", label:"睡眠8時間達成", xp:20 },
+    { id:"sleep9", label:"睡眠9時間達成", xp:30 },
+  ]},
+  { id:"knowledge", label:"知識", icon:"📖", color:C.knowledge, bg:C.knowledgeBg, missions:[
+    { id:"read_novel", label:"読書15分（小説）", xp:10 },
+    { id:"read_study", label:"読書15分（勉強）", xp:20 },
+    { id:"research",   label:"新分野の調査",   xp:20 },
+  ]},
+  { id:"tech", label:"技術", icon:"⚙️", color:C.tech, bg:C.techBg, missions:[
+    { id:"gas",          label:"GAS作成",         xp:20 },
+    { id:"programming",  label:"プログラミング30分", xp:20 },
+    { id:"tool_improve", label:"ツール改善",       xp:20 },
+  ]},
+  { id:"creative", label:"創造", icon:"✨", color:C.creative, bg:C.creativeBg, missions:[
+    { id:"new_idea", label:"新アイデア1件",   xp:10 },
+    { id:"ai_chat",  label:"AIとチャット1回", xp:5  },
+  ]},
+  { id:"social", label:"社交", icon:"🗣️", color:C.social, bg:C.socialBg, missions:[
+    { id:"friend_chat", label:"友人と雑談",         xp:10 },
+    { id:"outing",      label:"家族・友人と出かける", xp:20 },
+    { id:"event",       label:"イベント参加",       xp:30 },
+  ]},
+  { id:"daily", label:"毎日", icon:"🌿", color:C.daily, bg:C.dailyBg,
+    missions:[
+      { id:"water",   label:"水・お茶500ml以上",   xp:0, dailyPart:true },
+      { id:"cleanup", label:"5分片付け",           xp:0, dailyPart:true },
+      { id:"learn10", label:"読書または学習10分",  xp:0, dailyPart:true },
+    ],
+    bonus:10,
+  },
+];
+
+const SLEEP_IDS = ["sleep5","sleep7","sleep8","sleep9"];
+const SKEY = "questTracker_v5";
+
+function todayKey() { return new Date().toISOString().slice(0,10); }
+function load() {
+  try { const r=localStorage.getItem(SKEY); if(r) return JSON.parse(r); } catch{}
+  return { totalXP:0, totalG:0, catXP:{}, prevXP:0, prevCatXP:{}, history:{}, categories:DEFAULT_CATS };
+}
+function save(d) {
+  try { localStorage.setItem(SKEY,JSON.stringify(d)); } catch{}
+  supabaseSave(d); // クラウドにも保存
+}
+
+function Toast({ msg }) {
+  if(!msg) return null;
+  return (
+    <div style={{
+      position:"fixed", top:14, left:"50%", transform:"translateX(-50%)",
+      ...pb(C.border,"#FFF9C4"),
+      padding:"10px 20px", zIndex:9999, ...PX, fontSize:9,
+      color:C.text, whiteSpace:"nowrap",
+    }}>{msg}</div>
+  );
+}
+
+function EditModal({ categories, onSave, onClose }) {
+  const [cats,setCats] = useState(JSON.parse(JSON.stringify(categories)));
+  const [activeTab,setActiveTab] = useState(cats[0]?.id||"");
+  const [newLabel,setNewLabel] = useState("");
+  const [newXP,setNewXP] = useState("10");
+  const [newPenalty,setNewPenalty] = useState(false);
+  const activeCat = cats.find(c=>c.id===activeTab);
+
+  const upd = (catId,mId,field,val) =>
+    setCats(p=>p.map(c=>c.id!==catId?c:{...c,missions:c.missions.map(m=>m.id!==mId?m:{...m,[field]:val})}));
+  const del = (catId,mId) =>
+    setCats(p=>p.map(c=>c.id!==catId?c:{...c,missions:c.missions.filter(m=>m.id!==mId)}));
+  const add = (catId) => {
+    const label=newLabel.trim(); if(!label) return;
+    const xpN=parseInt(newXP)||0;
+    setCats(p=>p.map(c=>c.id!==catId?c:{...c,missions:[...c.missions,{
+      id:`custom_${Date.now()}`, label,
+      xp:newPenalty?-Math.abs(xpN):Math.abs(xpN),
+      penalty:newPenalty,
+    }]}));
+    setNewLabel(""); setNewXP("10"); setNewPenalty(false);
+  };
+
+  const inp = { ...PX, fontSize:8, padding:"6px 8px", border:`2px solid ${C.border}`, background:C.panelAlt, color:C.text, width:"100%", boxSizing:"border-box" };
+
+  return (
+    <div style={{ position:"fixed",inset:0,background:"rgba(0,0,0,0.65)",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center",padding:12 }}>
+      <div style={{ ...pb(C.border,C.panel),width:"100%",maxWidth:440,maxHeight:"90vh",display:"flex",flexDirection:"column",overflow:"hidden" }}>
+        <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 14px",borderBottom:`2px solid ${C.borderLight}`,background:C.grassDark }}>
+          <span style={{ ...PX,fontSize:9,color:C.white }}>⚙ ミッション編集</span>
+          <button onClick={onClose} style={{ ...PX,fontSize:12,background:"none",border:"none",color:C.white,cursor:"pointer" }}>✕</button>
+        </div>
+        <div style={{ display:"flex",overflowX:"auto",borderBottom:`2px solid ${C.borderLight}`,background:C.panelAlt }}>
+          {cats.map(c=>(
+            <button key={c.id} onClick={()=>setActiveTab(c.id)} style={{
+              flexShrink:0, padding:"8px 10px", ...PX, fontSize:7, cursor:"pointer",
+              background:activeTab===c.id?c.color+"22":"transparent",
+              border:"none", borderBottom:activeTab===c.id?`3px solid ${c.color}`:"3px solid transparent",
+              color:activeTab===c.id?c.color:C.textMuted,
+            }}>{c.icon}{c.label}</button>
+          ))}
+        </div>
+        <div style={{ flex:1,overflowY:"auto",padding:14 }}>
+          {activeCat && activeCat.missions.filter(m=>!m.dailyPart).map(m=>(
+            <div key={m.id} style={{ display:"flex",alignItems:"center",gap:8,marginBottom:8,...pb(C.borderLight,C.panelAlt),padding:"8px 10px" }}>
+              <div style={{ flex:1 }}>
+                <input value={m.label} onChange={e=>upd(activeCat.id,m.id,"label",e.target.value)} style={{ ...inp,marginBottom:4 }}/>
+                <div style={{ display:"flex",alignItems:"center",gap:6 }}>
+                  <span style={{ ...PX,fontSize:7,color:C.textMuted }}>XP:</span>
+                  <input type="number" value={m.xp} onChange={e=>upd(activeCat.id,m.id,"xp",parseInt(e.target.value)||0)} style={{ ...inp,width:70 }}/>
+                  {m.penalty&&<span style={{ ...PX,fontSize:7,color:C.red }}>ペナルティ</span>}
+                </div>
+              </div>
+              <button onClick={()=>del(activeCat.id,m.id)} style={{ ...PX,fontSize:10,background:C.red,border:`2px solid ${C.border}`,color:"white",padding:"4px 8px",cursor:"pointer",flexShrink:0 }}>✕</button>
+            </div>
+          ))}
+          {activeCat?.id==="daily"&&(
+            <div style={{ ...PX,fontSize:7,color:C.textMuted,textAlign:"center",padding:12,lineHeight:2 }}>毎日タスクは固定です</div>
+          )}
+          {activeCat && activeCat.id!=="daily"&&(
+            <div style={{ ...pb(C.borderMid,C.dailyBg),padding:12,marginTop:8 }}>
+              <div style={{ ...PX,fontSize:7,color:C.daily,marginBottom:8 }}>＋ 新規ミッション</div>
+              <input placeholder="ミッション名" value={newLabel} onChange={e=>setNewLabel(e.target.value)} style={{ ...inp,marginBottom:6 }}/>
+              <div style={{ display:"flex",gap:8,alignItems:"center",marginBottom:8 }}>
+                <span style={{ ...PX,fontSize:7,color:C.textMuted,flexShrink:0 }}>XP:</span>
+                <input type="number" value={newXP} onChange={e=>setNewXP(e.target.value)} style={{ ...inp,width:80 }}/>
+                <label style={{ display:"flex",alignItems:"center",gap:4,...PX,fontSize:7,color:C.red,flexShrink:0 }}>
+                  <input type="checkbox" checked={newPenalty} onChange={e=>setNewPenalty(e.target.checked)}/>ペナルティ
+                </label>
+              </div>
+              <button onClick={()=>add(activeCat.id)} style={{ ...PX,fontSize:8,...pb(C.border,C.grass),color:C.white,padding:"8px 14px",cursor:"pointer",width:"100%" }}>追加する</button>
+            </div>
+          )}
+        </div>
+        <div style={{ padding:12,borderTop:`2px solid ${C.borderLight}` }}>
+          <button onClick={()=>onSave(cats)} style={{ ...PX,fontSize:9,...pb(C.border,C.grassDark),color:C.white,padding:"10px",cursor:"pointer",width:"100%" }}>💾 保存する</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+// ═══ Supabase設定 ═══
+const SUPABASE_URL = "https://emnocrhggqiijnvpxfmk.supabase.co";
+const SUPABASE_KEY = "sb_publishable_pbL4NNHL-393xiC7LJKUDA_t4kGZxKz";
+
+// 匿名ユーザーID（端末固有・永続）
+function getAnonId() {
+  let id = localStorage.getItem("questlife_anon_id");
+  if (!id) {
+    id = "anon_" + Math.random().toString(36).slice(2) + Date.now().toString(36);
+    localStorage.setItem("questlife_anon_id", id);
+  }
+  return id;
+}
+
+// Supabaseからデータを読み込む
+async function supabaseLoad() {
+  try {
+    const userId = getAnonId();
+    const res = await fetch(
+      `${SUPABASE_URL}/rest/v1/user_data?user_id=eq.${userId}&select=data`,
+      {
+        headers: {
+          "apikey": SUPABASE_KEY,
+          "Authorization": `Bearer ${SUPABASE_KEY}`,
+          "Content-Type": "application/json",
+        }
+      }
+    );
+    if (!res.ok) return null;
+    const rows = await res.json();
+    if (rows.length === 0) return null;
+    return rows[0].data;
+  } catch(e) {
+    console.error("Supabase load error:", e);
+    return null;
+  }
+}
+
+// Supabaseへデータを保存（upsert）
+async function supabaseSave(data) {
+  try {
+    const userId = getAnonId();
+    const payload = { user_id: userId, data: data, updated_at: new Date().toISOString() };
+    await fetch(`${SUPABASE_URL}/rest/v1/user_data`, {
+      method: "POST",
+      headers: {
+        "apikey": SUPABASE_KEY,
+        "Authorization": `Bearer ${SUPABASE_KEY}`,
+        "Content-Type": "application/json",
+        "Prefer": "resolution=merge-duplicates",
+      },
+      body: JSON.stringify(payload),
+    });
+  } catch(e) {
+    console.error("Supabase save error:", e);
+  }
+}
+
+function App() {
+  const [data,setData] = useState(()=>{
+    const d=load();
+    if(!d.catXP)      d.catXP={};
+    if(!d.prevCatXP)  d.prevCatXP={};
+    if(!d.categories) d.categories=DEFAULT_CATS;
+    if(d.prevXP === undefined) {
+      const tc = d.history[todayKey()] || {};
+      let todaySum = 0;
+      for(const cat of d.categories){
+        for(const m of cat.missions){
+          if(tc[m.id] && !m.dailyPart) todaySum += m.xp;
+        }
+      }
+      const dc = d.categories.find(c=>c.id==="daily");
+      if(dc?.missions.every(m=>tc[m.id])) todaySum += dc.bonus||10;
+      d.prevXP = Math.max(0, d.totalXP - todaySum);
+      d.prevCatXP = {};
+    }
+    return d;
+  });
+  const [todayChecked,setTodayChecked] = useState(()=>load().history[todayKey()]||{});
+  const [tab,setTab] = useState("quest");
+  const [toast,setToast] = useState(null);
+  const [showEdit,setShowEdit] = useState(false);
+  const toastTimer = useRef(null);
+  const today = todayKey();
+
+  function showToast(msg){
+    setToast(msg);
+    clearTimeout(toastTimer.current);
+    toastTimer.current=setTimeout(()=>setToast(null),2200);
+  }
+
+
+  // ── Supabaseからデータを復元（初回起動時）──
+  useEffect(() => {
+    supabaseLoad().then(cloudData => {
+      if (!cloudData) return;
+      // クラウドのデータをlocalStorageと比較してより新しい方を使う
+      const localXP = data.totalXP || 0;
+      const cloudXP = cloudData.totalXP || 0;
+      if (cloudXP >= localXP) {
+        // クラウドの方が進んでいる（または同じ）→ クラウドを優先
+        if (!cloudData.catXP)     cloudData.catXP = {};
+        if (!cloudData.prevCatXP) cloudData.prevCatXP = {};
+        if (!cloudData.categories) cloudData.categories = DEFAULT_CATS;
+        if (cloudData.prevXP === undefined) cloudData.prevXP = 0;
+        setData(cloudData);
+        setTodayChecked(cloudData.history?.[todayKey()] || {});
+        save(cloudData);
+        showToast("☁️ クラウドから復元しました");
+      }
+    });
+  }, []);
+
+  function calcStats(checked, categories, prevXP) {
+    let todayXP = 0;
+    const catXP = {};
+    for (const cat of categories) {
+      for (const m of cat.missions) {
+        if (!checked[m.id] || m.dailyPart) continue;
+        todayXP += m.xp;
+        if (cat.id !== "daily" && m.xp > 0) {
+          catXP[cat.id] = (catXP[cat.id] || 0) + m.xp;
+        }
+      }
+    }
+    const dc = categories.find(c => c.id === "daily");
+    const dailyDone = dc?.missions.every(m => !!checked[m.id]);
+    if (dailyDone) todayXP += dc.bonus || 10;
+    const totalXP = Math.max(0, prevXP + todayXP);
+    const totalG  = Math.floor(totalXP / 10);
+    return { totalXP, totalG, catXP, dailyDone };
+  }
+
+  function handleCheck(missionId, xp, isDailyPart) {
+    const alreadyChecked = !!todayChecked[missionId];
+    if (SLEEP_IDS.includes(missionId) && !alreadyChecked) {
+      if (SLEEP_IDS.find(s => todayChecked[s])) {
+        soundWarn();
+        showToast("睡眠は1つだけ！"); return;
+      }
+    }
+    const newChecked = { ...todayChecked };
+    if (alreadyChecked) { delete newChecked[missionId]; }
+    else { newChecked[missionId] = true; }
+    const prevXP = data.prevXP ?? 0;
+    const prevStats = calcStats(todayChecked, data.categories, prevXP);
+    const nextStats = calcStats(newChecked,   data.categories, prevXP);
+    const xpDiff = nextStats.totalXP - prevStats.totalXP;
+    const gDiff  = nextStats.totalG  - prevStats.totalG;
+    if (!prevStats.dailyDone && nextStats.dailyDone) {
+      const dc = data.categories.find(c=>c.id==="daily");
+      soundDailyBonus();
+      showToast(`🌿 毎日ボーナス! +${dc?.bonus||10}XP`);
+    } else if (alreadyChecked) {
+      soundUncheck();
+    } else if (xp < 0) {
+      soundPenalty();
+      showToast(`${xpDiff}XP ${gDiff}G`);
+    } else {
+      soundCheck();
+      if (xpDiff !== 0) showToast(`+${xpDiff}XP +${gDiff}G`);
+    }
+    const newCatXP = { ...data.prevCatXP };
+    for (const [k,v] of Object.entries(nextStats.catXP)) {
+      newCatXP[k] = (newCatXP[k] || 0) + v;
+    }
+    const newData = {
+      ...data,
+      totalXP: nextStats.totalXP,
+      totalG:  nextStats.totalG,
+      catXP:   newCatXP,
+      history: { ...data.history, [today]: newChecked },
+    };
+    setTodayChecked(newChecked);
+    setData(newData);
+    save(newData);
+  }
+
+  const [lastDate, setLastDate] = useState(todayKey());
+  if (lastDate !== todayKey()) {
+    const newPrevXP = data.totalXP;
+    const newPrevCatXP = { ...data.catXP };
+    const newData = { ...data, prevXP: newPrevXP, prevCatXP: newPrevCatXP };
+    setData(newData);
+    save(newData);
+    setTodayChecked({});
+    setLastDate(todayKey());
+  }
+
+  function handleSaveCategories(newCats){
+    const newData = { ...data, categories:newCats };
+    setData(newData); save(newData);
+    setShowEdit(false); showToast("💾 保存しました！");
+  }
+
+  // ── データエクスポート（JSONダウンロード）──
+  function handleExport() {
+    const json = JSON.stringify(data, null, 2);
+    const blob = new Blob([json], { type:"application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `questlife_backup_${todayKey()}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast("📦 バックアップ完了！");
+  }
+
+  // ── データインポート（JSONファイル読み込み）──
+  const importRef = useRef(null);
+  function handleImport(e) {
+    const file = e.target.files[0]; if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const imported = JSON.parse(ev.target.result);
+        if (!imported.totalXP === undefined || !imported.history) throw new Error("invalid");
+        setData(imported);
+        setTodayChecked(imported.history[todayKey()] || {});
+        save(imported);
+        showToast("✅ インポート成功！");
+      } catch {
+        showToast("❌ ファイルが無効です");
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = "";
+  }
+
+  const lvInfo = getLvInfo(data.totalXP);
+  const [sceneIdx, setSceneIdx] = useState(0);
+  const scene = SCENES[sceneIdx];
+  // ヘッダー高さ: 景観80 + ステータス約78 + タブ約38 = 196
+  const HEADER_H = 196;
+
+  return (
+    <div style={{ minHeight:"100vh", background:C.ground, ...PX, fontSize:10, color:C.text, maxWidth:480, margin:"0 auto" }}>
+      <Toast msg={toast}/>
+      {showEdit && <EditModal categories={data.categories} onSave={handleSaveCategories} onClose={()=>setShowEdit(false)}/>}
+
+      {/* ═══ 固定ヘッダー ═══ */}
+      <div style={{ position:"fixed", top:0, left:"50%", transform:"translateX(-50%)", width:"100%", maxWidth:480, zIndex:100 }}>
+        {/* アニメーション景観 */}
+        <AnimatedLandscape onSceneChange={setSceneIdx} />
+
+        {/* ステータスバー */}
+        <div style={{
+          background:`repeating-linear-gradient(0deg,${scene.tabActive} 0px,${scene.tabActive} 4px,${scene.tabBg} 4px,${scene.tabBg} 8px)`,
+          borderBottom:`3px solid ${C.border}`,
+          padding:"8px 12px",
+          transition:"background 0.6s ease",
+        }}>
+          <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+            <div style={{ width:40,height:40,flexShrink:0,...pb(C.border,"#FFD700"),display:"flex",alignItems:"center",justifyContent:"center",fontSize:20 }}>⚔️</div>
+            <div style={{ flex:1 }}>
+              <div style={{ display:"flex",justifyContent:"space-between",marginBottom:4 }}>
+                <span style={{ fontSize:10,color:scene.accent }}>LV.{lvInfo.level}</span>
+                <span style={{ fontSize:9,color:scene.accent }}>💰{data.totalG}G</span>
+              </div>
+              <SmoothBar current={lvInfo.currentXP} total={lvInfo.neededXP} color={scene.accent} height={13}/>
+              <div style={{ fontSize:7,color:"#FFFFFF99",marginTop:3 }}>{lvInfo.currentXP}/{lvInfo.neededXP} XP（計{data.totalXP}）</div>
+            </div>
+          </div>
+        </div>
+
+        {/* タブ */}
+        <div style={{ display:"flex", background:scene.tabBg, borderBottom:`3px solid ${C.border}`, transition:"background 0.6s ease" }}>
+          {[{key:"quest",label:"クエスト"},{key:"status",label:"ステータス"},{key:"log",label:"ログ"}].map(t=>(
+            <button key={t.key} onClick={()=>setTab(t.key)} style={{
+              flex:1, padding:"10px 4px",
+              background:tab===t.key?scene.tabActive:"transparent",
+              border:"none", borderBottom:tab===t.key?`3px solid ${scene.accent}`:"3px solid transparent",
+              color:tab===t.key?scene.accent:"#FFFFFF88",
+              ...PX, fontSize:8, cursor:"pointer",
+              transition:"background 0.6s ease, color 0.6s ease, border-color 0.6s ease",
+            }}>{t.label}</button>
+          ))}
+        </div>
+      </div>
+
+      {/* ═══ コンテンツ ═══ */}
+      <div style={{ paddingTop:HEADER_H+8, paddingBottom:80, background:C.panel }}>
+
+        {tab==="quest"&&(
+          <div style={{ padding:"0 10px" }}>
+            <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,paddingTop:4 }}>
+              <span style={{ fontSize:7,color:C.textMuted }}>📅 {today}</span>
+              <div style={{ display:"flex", gap:6 }}>
+                <button onClick={handleExport} style={{ ...PX,fontSize:6,...pb(C.border,"#1A5276"),color:C.white,padding:"5px 8px",cursor:"pointer" }}>📦 保存</button>
+                <button onClick={()=>importRef.current?.click()} style={{ ...PX,fontSize:6,...pb(C.border,"#6B4F10"),color:C.white,padding:"5px 8px",cursor:"pointer" }}>📂 読込</button>
+                <input ref={importRef} type="file" accept=".json" style={{display:"none"}} onChange={handleImport}/>
+                <button onClick={()=>setShowEdit(true)} style={{ ...PX,fontSize:6,...pb(C.border,C.grassDark),color:C.white,padding:"5px 8px",cursor:"pointer" }}>⚙ 編集</button>
+              </div>
+            </div>
+            {data.categories.map(cat=>{
+              const dailyIds=cat.id==="daily"?cat.missions.map(m=>m.id):[];
+              const allDaily=cat.id==="daily"&&dailyIds.every(id=>todayChecked[id]!==undefined);
+              return (
+                <div key={cat.id} style={{ marginBottom:16 }}>
+                  <div style={{ display:"flex",alignItems:"center",gap:6,padding:"6px 12px",marginBottom:6,background:cat.color+"22",borderLeft:`4px solid ${cat.color}`,border:`2px solid ${cat.color}55` }}>
+                    <span style={{ fontSize:14 }}>{cat.icon}</span>
+                    <span style={{ fontSize:9,color:cat.color }}>{cat.label}</span>
+                    {cat.bonus&&<span style={{ marginLeft:"auto",fontSize:7,color:allDaily?C.green:C.textMuted }}>{allDaily?"✓ ":""}全達成+{cat.bonus}XP</span>}
+                  </div>
+                  {cat.missions.map(m=>{
+                    const checked = todayChecked[m.id]!==undefined;
+                    return (
+                      <button key={m.id} onClick={()=>handleCheck(m.id,m.xp,!!m.dailyPart)} style={{
+                        display:"flex",alignItems:"center",gap:10,
+                        width:"100%",textAlign:"left",padding:"9px 12px",marginBottom:5,
+                        background:checked?cat.color+"18":C.panel,
+                        border:`2px solid ${checked?cat.color:C.borderLight}`,
+                        boxShadow:checked?`2px 2px 0 ${cat.color}88`:`3px 3px 0 ${C.borderLight}`,
+                        cursor:"pointer",...PX,fontSize:8,
+                        transform:checked?"translate(1px,1px)":"none",
+                        transition:"all 0.1s",
+                      }}>
+                        <div style={{ width:18,height:18,flexShrink:0,border:`2px solid ${checked?cat.color:C.border}`,background:checked?cat.color:C.white,display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,color:C.white }}>
+                          {checked&&"✓"}
+                        </div>
+                        <span style={{ flex:1,color:checked?cat.color:C.text,textDecoration:checked?"line-through":"none",lineHeight:1.7 }}>{m.label}</span>
+                        {!m.dailyPart&&<span style={{ fontSize:8,fontWeight:"bold",flexShrink:0,color:m.penalty?C.red:C.green }}>{m.xp>0?`+${m.xp}`:m.xp}</span>}
+                      </button>
+                    );
+                  })}
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {tab==="status"&&(
+          <div style={{ padding:"4px 10px" }}>
+            <div style={{ ...pb(C.border,C.panel),padding:14,marginBottom:12 }}>
+              <div style={{ fontSize:8,color:C.textMuted,marginBottom:12 }}>▶ PLAYER STATUS</div>
+              {[
+                {label:"LEVEL",  value:`LV.${lvInfo.level}`,              color:C.tech},
+                {label:"TOTAL XP",value:`${data.totalXP} XP`,             color:C.xpColor},
+                {label:"GOLD",   value:`${data.totalG} G`,                color:C.gold},
+                {label:"NEXT LV",value:`残り${lvInfo.neededXP-lvInfo.currentXP}XP`,color:C.green},
+              ].map(row=>(
+                <div key={row.label} style={{ display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:`1px dashed ${C.borderLight}` }}>
+                  <span style={{ fontSize:7,color:C.textMuted }}>{row.label}</span>
+                  <span style={{ fontSize:10,color:row.color }}>{row.value}</span>
+                </div>
+              ))}
+              <div style={{ marginTop:12 }}>
+                <div style={{ fontSize:7,color:C.textMuted,marginBottom:6 }}>XP [{lvInfo.currentXP}/{lvInfo.neededXP}]</div>
+                <SmoothBar current={lvInfo.currentXP} total={lvInfo.neededXP} color={C.xpColor} height={16}/>
+              </div>
+            </div>
+
+            <div style={{ ...pb(C.border,C.panel),padding:14,marginBottom:12 }}>
+              <div style={{ fontSize:8,color:C.textMuted,marginBottom:14 }}>▶ STATS</div>
+              {data.categories.filter(c=>c.id!=="daily").map(cat=>{
+                const catXP=data.catXP?.[cat.id]||0;
+                const catLv=getCatLv(catXP);
+                return (
+                  <div key={cat.id} style={{ marginBottom:16 }}>
+                    <div style={{ display:"flex",justifyContent:"space-between",marginBottom:5 }}>
+                      <span style={{ fontSize:8,color:cat.color }}>{cat.icon} {cat.label}</span>
+                      <span style={{ fontSize:8,color:cat.color }}>LV.{catLv.level}</span>
+                    </div>
+                    <SmoothBar current={catLv.currentXP} total={catLv.neededXP} color={cat.color} height={14}/>
+                    <div style={{ fontSize:7,color:C.textMuted,marginTop:3,textAlign:"right" }}>{catLv.currentXP}/{catLv.neededXP} XP（計{catXP}）</div>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div style={{ ...pb(C.border,C.panel),padding:14 }}>
+              <div style={{ fontSize:8,color:C.textMuted,marginBottom:12 }}>▶ LEVEL TABLE</div>
+              {Array.from({length:10},(_,i)=>{
+                const lv=i+1; let base=0;
+                for(let j=1;j<lv;j++) base+=100+(j-1)*50;
+                const end=base+100+(lv-1)*50-1;
+                const isCur=lv===lvInfo.level;
+                return (
+                  <div key={lv} style={{ display:"flex",justifyContent:"space-between",padding:"6px 8px",marginBottom:4,background:isCur?"#FFF9C4":"transparent",border:isCur?`2px solid ${C.gold}`:"1px solid transparent",fontSize:7 }}>
+                    <span style={{ color:isCur?C.ground:C.textMuted }}>LV.{lv}</span>
+                    <span style={{ color:isCur?C.ground:C.textMuted }}>{base}～{lv===10?"∞":end}</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {tab==="log"&&(
+          <div style={{ padding:"4px 10px" }}>
+            <div style={{ fontSize:8,color:C.textMuted,marginBottom:12 }}>▶ ACTIVITY LOG</div>
+            {Object.entries(data.history).sort(([a],[b])=>b.localeCompare(a)).slice(0,30).map(([date,checked])=>{
+              // ミッションIDからXPを逆引きして合計
+              const missionMap = {};
+              for (const cat of data.categories) {
+                for (const m of cat.missions) {
+                  missionMap[m.id] = m;
+                }
+              }
+              let xpSum = 0;
+              const checkedIds = Object.keys(checked).filter(id => checked[id]);
+              for (const id of checkedIds) {
+                const m = missionMap[id];
+                if (m && !m.dailyPart) xpSum += m.xp;
+              }
+              const dailyCat = data.categories.find(c=>c.id==="daily");
+              const allDaily = dailyCat?.missions.every(m=>checked[m.id]);
+              const bonus = allDaily ? dailyCat?.bonus||10 : 0;
+              const total = xpSum + bonus;
+              // 完了件数（毎日タスク除く）
+              const nonDailyIds = new Set(
+                data.categories.filter(c=>c.id!=="daily").flatMap(c=>c.missions.map(m=>m.id))
+              );
+              const count = checkedIds.filter(id=>nonDailyIds.has(id)).length;
+              return (
+                <div key={date} style={{ ...pb(C.borderLight,C.panel),padding:"10px 12px",marginBottom:8 }}>
+                  <div style={{ display:"flex",justifyContent:"space-between",marginBottom:5 }}>
+                    <span style={{ fontSize:8 }}>{date}</span>
+                    <span style={{ fontSize:8,color:total>=0?C.green:C.red }}>{total>=0?"+":""}{total}XP</span>
+                  </div>
+                  <div style={{ fontSize:7,color:C.textMuted }}>
+                    {count}件完了{allDaily&&<span style={{ color:C.gold,marginLeft:8 }}>🌿ボーナス</span>}
+                  </div>
+                </div>
+              );
+            })}
+            {Object.keys(data.history).length===0&&(
+              <div style={{ textAlign:"center",color:C.textMuted,fontSize:8,marginTop:40,lineHeight:2.5 }}>まだ記録がありません</div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+
+    // Mount
+    ReactDOM.createRoot(document.getElementById('root')).render(
+      React.createElement(React.StrictMode, null,
+        React.createElement(App, null)
+      )
+    );
+  </script>
+</body>
+</html>
