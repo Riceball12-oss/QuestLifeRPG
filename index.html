@@ -67,15 +67,23 @@ function getAudioCtx() {
 }
 function beep(freq, duration, type="square", volume=0.18, startDelay=0) {
   const ctx = getAudioCtx(); if (!ctx) return;
-  const osc = ctx.createOscillator();
-  const gain = ctx.createGain();
-  osc.connect(gain); gain.connect(ctx.destination);
-  osc.type = type;
-  osc.frequency.setValueAtTime(freq, ctx.currentTime + startDelay);
-  gain.gain.setValueAtTime(volume, ctx.currentTime + startDelay);
-  gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + startDelay + duration);
-  osc.start(ctx.currentTime + startDelay);
-  osc.stop(ctx.currentTime + startDelay + duration + 0.02);
+  // suspended状態（ブラウザのAutoplay制限）をユーザー操作後に解除
+  const play = () => {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain); gain.connect(ctx.destination);
+    osc.type = type;
+    osc.frequency.setValueAtTime(freq, ctx.currentTime + startDelay);
+    gain.gain.setValueAtTime(volume, ctx.currentTime + startDelay);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + startDelay + duration);
+    osc.start(ctx.currentTime + startDelay);
+    osc.stop(ctx.currentTime + startDelay + duration + 0.02);
+  };
+  if (ctx.state === 'suspended') {
+    ctx.resume().then(play).catch(() => {});
+  } else {
+    play();
+  }
 }
 // 通常チェック音（ピコッ↑）
 function soundCheck() {
@@ -527,63 +535,111 @@ const SCENES = [
 ];
 const SCENE_DURATION = 8000;
 
+// シーンをSVG文字列としてレンダリング（React外でDOM直接操作するため）
+function renderSceneToString(SceneComponent, offset) {
+  // 各シーンのSVG要素をJSX→文字列変換は複雑なので
+  // offsetをdata属性として渡し、SVG内のtransformで制御する方式を使用
+  return offset;
+}
+
 function AnimatedLandscape({ onSceneChange }) {
   const [sceneIdx, setSceneIdx] = useState(0);
-  const [fadeOut, setFadeOut] = useState(false);
-  const [offset, setOffset] = useState(0);
+  const [nextSceneIdx, setNextSceneIdx] = useState(null);
+  const [crossfade, setCrossfade] = useState(false); // クロスフェード中か
+  // offsetはrefで管理→setStateを呼ばずDOMを直接更新
+  const offsetRef = useRef(0);
+  const svgGroupRef = useRef(null); // SVG内のtranslateグループ
   const rafRef = useRef(null);
   const lastTimeRef = useRef(null);
-  const sceneTimerRef = useRef(null);
+  const sceneIdxRef = useRef(0);
+  const containerRef = useRef(null);
 
+  // rAF: Reactのstateを更新せずSVGのtransformを直接書き換え
   useEffect(() => {
     const animate = (ts) => {
       if (lastTimeRef.current === null) lastTimeRef.current = ts;
-      const dt = ts - lastTimeRef.current;
+      const dt = Math.min(ts - lastTimeRef.current, 50);
       lastTimeRef.current = ts;
-      const speed = SCENES[sceneIdx].speed;
-      setOffset(prev => (prev + speed * dt * 0.05) % 960);
+      const speed = SCENES[sceneIdxRef.current].speed;
+      offsetRef.current = (offsetRef.current + speed * dt * 0.05) % 960;
+      // シーン内部は [0, w].map で2枚並列しoffset propで制御している
+      // 外側groupのtranslateでスクロール位置を直接制御
+      if (svgGroupRef.current) {
+        svgGroupRef.current.setAttribute('transform', `translate(${-offsetRef.current},0)`);
+      }
       rafRef.current = requestAnimationFrame(animate);
     };
     rafRef.current = requestAnimationFrame(animate);
     return () => cancelAnimationFrame(rafRef.current);
-  }, [sceneIdx]);
-
-  useEffect(() => {
-    sceneTimerRef.current = setInterval(() => {
-      setFadeOut(true);
-      setTimeout(() => {
-        setSceneIdx(prev => {
-          const next = (prev + 1) % SCENES.length;
-          onSceneChange && onSceneChange(next);
-          return next;
-        });
-        setOffset(0);
-        lastTimeRef.current = null;
-        setFadeOut(false);
-      }, 600);
-    }, SCENE_DURATION);
-    return () => clearInterval(sceneTimerRef.current);
   }, []);
 
-  const scene = SCENES[sceneIdx];
+  // シーン切替: クロスフェード演出
+  const crossfadeTimerRef = useRef(null);
+  useEffect(() => {
+    const timer = setInterval(() => {
+      const next = (sceneIdxRef.current + 1) % SCENES.length;
+      setNextSceneIdx(next);
+      setCrossfade(true);
+      // refで管理してアンマウント時にクリア可能にする
+      crossfadeTimerRef.current = setTimeout(() => {
+        sceneIdxRef.current = next;
+        offsetRef.current = 0;
+        lastTimeRef.current = null;
+        setSceneIdx(next);
+        setNextSceneIdx(null);
+        setCrossfade(false);
+        onSceneChange && onSceneChange(next);
+      }, 700);
+    }, SCENE_DURATION);
+    return () => {
+      clearInterval(timer);
+      if (crossfadeTimerRef.current) clearTimeout(crossfadeTimerRef.current);
+    };
+  }, []);
+
+  const CurrentScene = SCENES[sceneIdx].Component;
+  const NextScene = nextSceneIdx !== null ? SCENES[nextSceneIdx].Component : null;
 
   return (
-    <div style={{ position:"relative", lineHeight:0, overflow:"hidden" }}>
+    <div ref={containerRef} style={{ position:"relative", lineHeight:0, overflow:"hidden" }}>
+      {/* レスポンシブSVG */}
       <svg
-        width="480" height="80"
-        viewBox="0 0 480 80"
+        viewBox="0 0 960 80"
         style={{
           display:"block",
-          imageRendering:"pixelated",
-          opacity: fadeOut ? 0 : 1,
-          transition:"opacity 0.6s ease",
           width:"100%",
+          height:"auto",
+          aspectRatio:"960/80",
+          imageRendering:"pixelated",
+          opacity: crossfade ? 0 : 1,
+          transition:"opacity 0.7s ease",
         }}
         xmlns="http://www.w3.org/2000/svg"
       >
-        <scene.Component offset={offset}/>
+        {/* ref付きgroupをrAFで直接translate更新 → Reactのre-renderなし */}
+        <g ref={svgGroupRef} transform="translate(0,0)">
+          <CurrentScene offset={0}/>
+        </g>
       </svg>
-      {/* シーンドット（中央） */}
+
+      {/* クロスフェード用の次シーン */}
+      {NextScene && (
+        <svg
+          viewBox="0 0 960 80"
+          style={{
+            position:"absolute", top:0, left:0,
+            width:"100%", height:"100%",
+            imageRendering:"pixelated",
+            opacity: crossfade ? 1 : 0,
+            transition:"opacity 0.7s ease",
+          }}
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          <NextScene offset={0}/>
+        </svg>
+      )}
+
+      {/* シーンドット */}
       <div style={{
         position:"absolute", bottom:4, left:"50%", transform:"translateX(-50%)",
         display:"flex", gap:4,
@@ -965,6 +1021,61 @@ function TodayProgress({ todayChecked, categories }) {
   );
 }
 
+// カテゴリ別達成率ランキング（全期間）
+function CategoryRankChart({ history, categories }) {
+  const cats = categories.filter(c => c.id !== "daily");
+  const totalDays = Object.keys(history).length;
+  if (totalDays === 0) return null;
+
+  // カテゴリごとの「達成日数」と「総獲得XP」を集計
+  const stats = cats.map(cat => {
+    let achievedDays = 0;
+    let totalXP = 0;
+    for (const checked of Object.values(history)) {
+      const dayXP = cat.missions
+        .filter(m => !m.dailyPart && checked[m.id] && m.xp > 0)
+        .reduce((s, m) => s + m.xp, 0);
+      if (dayXP > 0) achievedDays++;
+      totalXP += dayXP;
+    }
+    const rate = Math.round((achievedDays / totalDays) * 100);
+    return { ...cat, achievedDays, totalXP, rate };
+  }).sort((a, b) => b.rate - a.rate);
+
+  return (
+    <div style={{ ...pb(C.border,C.panel), padding:"12px 10px", marginBottom:12 }}>
+      <div style={{ fontSize:8, color:C.textMuted, marginBottom:12 }}>▶ カテゴリ別達成率（全期間）</div>
+      {stats.map((cat, i) => (
+        <div key={cat.id} style={{ marginBottom:10 }}>
+          <div style={{ display:"flex", justifyContent:"space-between", marginBottom:4 }}>
+            <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+              <span style={{ ...PX, fontSize:7, color:C.textMuted }}>{i+1}.</span>
+              <span style={{ fontSize:12 }}>{cat.icon}</span>
+              <span style={{ ...PX, fontSize:7, color:cat.color }}>{cat.label}</span>
+            </div>
+            <div style={{ display:"flex", gap:8, alignItems:"center" }}>
+              <span style={{ ...PX, fontSize:6, color:C.textMuted }}>{cat.achievedDays}/{totalDays}日</span>
+              <span style={{ ...PX, fontSize:8, color:cat.color }}>{cat.rate}%</span>
+            </div>
+          </div>
+          {/* 達成率バー */}
+          <div style={{ position:"relative", height:8, background:"#C8D8B8", border:`1px solid ${C.borderLight}` }}>
+            <div style={{
+              position:"absolute", top:0, left:0, height:"100%",
+              width:`${cat.rate}%`,
+              background:cat.color,
+              transition:"width 0.6s ease",
+            }}/>
+          </div>
+          <div style={{ ...PX, fontSize:6, color:C.textMuted, marginTop:2, textAlign:"right" }}>
+            累計 {cat.totalXP}XP
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function Toast({ msg }) {
   if(!msg) return null;
   return (
@@ -1094,7 +1205,8 @@ function App() {
   });
   const [todayChecked, setTodayChecked] = useState(() => {
     const d = load();
-    return (d.history || {})[todayKey()] || {};
+    const today = todayKey();
+    return (d.history || {})[today] || {};
   });
 
   const [tab,setTab] = useState("quest");
@@ -1186,21 +1298,36 @@ function App() {
     save(newData);
   }
 
-  const [lastDate, setLastDate] = useState(todayKey());
-
-  // ── 日付またぎ検知（シンプル版：historyベースなので清算不要）──
+  // ── 日付またぎ検知（最も確実な実装）──
+  // lastDateをrefで管理し、interval・focus・visibilitychangeの3重チェック
+  const lastDateRef = useRef(todayKey());
   useEffect(() => {
     const checkDate = () => {
       const today = todayKey();
-      if (lastDate !== today) {
-        setTodayChecked({});
-        setLastDate(today);
+      if (lastDateRef.current !== today) {
+        lastDateRef.current = today;
+        // 今日のチェック状態をhistoryから取得（なければ空）
+        setTodayChecked(prev => {
+          // すでに今日のデータがあればそのまま、なければリセット
+          return data.history?.[today] || {};
+        });
       }
     };
-    checkDate();
+    // 1. 1分ごとにポーリング（タブ開きっぱなし対策）
+    const timer = setInterval(checkDate, 60 * 1000);
+    // 2. タブがアクティブになったとき
     window.addEventListener('focus', checkDate);
-    return () => window.removeEventListener('focus', checkDate);
-  }, [lastDate]);
+    // 3. バックグラウンドから復帰したとき（スマホで最重要）
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') checkDate();
+    });
+    // 初回チェック
+    checkDate();
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener('focus', checkDate);
+    };
+  }, [data.history]);
 
   function handleSaveCategories(newCats){
     const newData = { ...data, categories:newCats };
@@ -1366,6 +1493,7 @@ function App() {
             <WeekBarChart history={data.history} categories={data.categories}/>
             <MonthLineChart history={data.history} categories={data.categories}/>
             <CategoryStackChart history={data.history} categories={data.categories}/>
+            <CategoryRankChart history={data.history} categories={data.categories}/>
             <div style={{ fontSize:8,color:C.textMuted,marginBottom:12,marginTop:4 }}>▶ ACTIVITY LOG</div>
             {Object.entries(data.history).sort(([a],[b])=>b.localeCompare(a)).slice(0,30).map(([date,checked])=>{
               const missionMap = {};
