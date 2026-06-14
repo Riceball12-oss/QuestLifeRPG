@@ -16,10 +16,7 @@
     *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
     html,body{height:100%;background:#1A2E0A;overflow:hidden;}
     #root{height:100%;overflow-y:auto;-webkit-overflow-scrolling:touch;}
-    body{
-      padding-top:env(safe-area-inset-top);
-      padding-bottom:env(safe-area-inset-bottom);
-    }
+    body{padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bottom);}
   </style>
   <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
@@ -30,10 +27,33 @@
   <script type="text/babel" data-presets="react">
     const { useState, useRef, useEffect } = React;
 
+// Google Fonts
+if (!document.getElementById("pf2")) {
+  const l = document.createElement("link");
+  l.id = "pf2"; l.rel = "stylesheet";
+  l.href = "https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap";
+  document.head.appendChild(l);
+}
 
-
-
-
+// PWA用メタタグ（スマホのホーム画面追加対応）
+if (!document.getElementById("pwa-meta")) {
+  const metas = [
+    { name:"viewport",        content:"width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" },
+    { name:"mobile-web-app-capable", content:"yes" },
+    { name:"apple-mobile-web-app-capable", content:"yes" },
+    { name:"apple-mobile-web-app-status-bar-style", content:"black-translucent" },
+    { name:"apple-mobile-web-app-title", content:"QuestLife" },
+    { name:"theme-color",     content:"#2D4A1E" },
+  ];
+  metas.forEach((m, i) => {
+    const el = document.createElement("meta");
+    el.name = m.name; el.content = m.content;
+    if (i === 0) el.id = "pwa-meta";
+    document.head.appendChild(el);
+  });
+  // タイトル
+  document.title = "QuestLife";
+}
 
 const PX = { fontFamily:"'Press Start 2P',monospace" };
 
@@ -655,17 +675,66 @@ const DEFAULT_CATS = [
 ];
 
 const SLEEP_IDS = ["sleep5","sleep7","sleep8","sleep9"];
-const SKEY = "questTracker_v5";
+const SKEY = "questTracker_v6"; // バージョン更新で旧データと分離
 
 function todayKey() { return new Date().toISOString().slice(0,10); }
-function load() {
-  try { const r=localStorage.getItem(SKEY); if(r) return JSON.parse(r); } catch{}
-  return { totalXP:0, totalG:0, catXP:{}, prevXP:0, prevCatXP:{}, history:{}, categories:DEFAULT_CATS };
+
+// ═══ historyから全XPを再計算（single source of truth）═══
+function recalcFromHistory(history, categories) {
+  const missionMap = {};
+  for (const cat of categories) {
+    for (const m of cat.missions) missionMap[m.id] = m;
+  }
+  const dc = categories.find(c => c.id === "daily");
+  let totalXP = 0;
+  const catXP = {};
+
+  for (const [date, checked] of Object.entries(history)) {
+    let dayXP = 0;
+    for (const id of Object.keys(checked)) {
+      if (!checked[id]) continue;
+      const m = missionMap[id];
+      if (!m || m.dailyPart) continue;
+      dayXP += m.xp;
+      if (m.xp > 0 && missionMap[id]) {
+        const cat = categories.find(c => c.missions.some(mm => mm.id === id));
+        if (cat && cat.id !== "daily") {
+          catXP[cat.id] = (catXP[cat.id] || 0) + m.xp;
+        }
+      }
+    }
+    // 毎日ボーナス
+    if (dc?.missions.every(m => checked[m.id])) dayXP += dc.bonus || 10;
+    totalXP += dayXP;
+  }
+
+  totalXP = Math.max(0, totalXP);
+  return { totalXP, totalG: Math.floor(totalXP / 10), catXP };
 }
+
+function load() {
+  try {
+    // v6データを優先、なければv5から移行
+    const r6 = localStorage.getItem(SKEY);
+    if (r6) return JSON.parse(r6);
+    const r5 = localStorage.getItem("questTracker_v5");
+    if (r5) {
+      const old = JSON.parse(r5);
+      // v5データをv6形式に変換（historyとcategoriesだけ引き継ぐ）
+      return {
+        history:    old.history    || {},
+        categories: old.categories || DEFAULT_CATS,
+      };
+    }
+  } catch{}
+  return { history:{}, categories:DEFAULT_CATS };
+}
+
 function save(d) {
-  try { localStorage.setItem(SKEY,JSON.stringify(d)); } catch{}
+  try { localStorage.setItem(SKEY, JSON.stringify(d)); } catch{}
   supabaseSave(d);
 }
+
 
 function Toast({ msg }) {
   if(!msg) return null;
@@ -762,7 +831,7 @@ function EditModal({ categories, onSave, onClose }) {
 }
 
 
-// ═══ Supabase設定 ═══
+// ═══ Supabase ═══
 const SUPABASE_URL = "https://emnocrhggqiijnvpxfmk.supabase.co";
 const SUPABASE_KEY = "sb_publishable_pbL4NNHL-393xiC7LJKUDA_t4kGZxKz";
 
@@ -777,20 +846,18 @@ function getAnonId() {
 
 async function supabaseLoad() {
   try {
-    const userId = getAnonId();
     const res = await fetch(
-      `${SUPABASE_URL}/rest/v1/user_data?user_id=eq.${encodeURIComponent(userId)}&select=data`,
+      `${SUPABASE_URL}/rest/v1/user_data?user_id=eq.${encodeURIComponent(getAnonId())}&select=data`,
       { headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${SUPABASE_KEY}` } }
     );
     if (!res.ok) return null;
     const rows = await res.json();
     return rows.length > 0 ? rows[0].data : null;
-  } catch(e) { console.error("load error:", e); return null; }
+  } catch(e) { return null; }
 }
 
 async function supabaseSave(data) {
   try {
-    const userId = getAnonId();
     await fetch(`${SUPABASE_URL}/rest/v1/user_data`, {
       method: "POST",
       headers: {
@@ -799,33 +866,23 @@ async function supabaseSave(data) {
         "Content-Type": "application/json",
         "Prefer": "resolution=merge-duplicates",
       },
-      body: JSON.stringify({ user_id: userId, data: data, updated_at: new Date().toISOString() }),
+      body: JSON.stringify({ user_id: getAnonId(), data: data, updated_at: new Date().toISOString() }),
     });
-  } catch(e) { console.error("save error:", e); }
+  } catch(e) {}
 }
 
 function App() {
-  const [data,setData] = useState(()=>{
-    const d=load();
-    if(!d.catXP)      d.catXP={};
-    if(!d.prevCatXP)  d.prevCatXP={};
-    if(!d.categories) d.categories=DEFAULT_CATS;
-    if(d.prevXP === undefined) {
-      const tc = d.history[todayKey()] || {};
-      let todaySum = 0;
-      for(const cat of d.categories){
-        for(const m of cat.missions){
-          if(tc[m.id] && !m.dailyPart) todaySum += m.xp;
-        }
-      }
-      const dc = d.categories.find(c=>c.id==="daily");
-      if(dc?.missions.every(m=>tc[m.id])) todaySum += dc.bonus||10;
-      d.prevXP = Math.max(0, d.totalXP - todaySum);
-      d.prevCatXP = {};
-    }
+  const [data, setData] = useState(() => {
+    const d = load();
+    if (!d.categories) d.categories = DEFAULT_CATS;
+    if (!d.history)    d.history    = {};
     return d;
   });
-  const [todayChecked,setTodayChecked] = useState(()=>load().history[todayKey()]||{});
+  const [todayChecked, setTodayChecked] = useState(() => {
+    const d = load();
+    return (d.history || {})[todayKey()] || {};
+  });
+
   const [tab,setTab] = useState("quest");
   const [toast,setToast] = useState(null);
   const [showEdit,setShowEdit] = useState(false);
@@ -838,48 +895,44 @@ function App() {
     toastTimer.current=setTimeout(()=>setToast(null),2200);
   }
 
+  // historyから派生するXP（毎回再計算）
+  const { totalXP, totalG, catXP } = recalcFromHistory(data.history || {}, data.categories);
+  const lvInfo = getLvInfo(totalXP);
 
-  // ── Supabase初回復元（マウント時のみ）──
+  // 今日分のXP計算（トースト表示用）
+
+  // ── Supabase初回復元（historyの件数で比較）──
   const syncDoneRef = useRef(false);
   useEffect(() => {
     if (syncDoneRef.current) return;
     syncDoneRef.current = true;
     supabaseLoad().then(cloudData => {
       if (!cloudData) return;
-      if (!cloudData.catXP)      cloudData.catXP = {};
-      if (!cloudData.prevCatXP)  cloudData.prevCatXP = {};
       if (!cloudData.categories) cloudData.categories = DEFAULT_CATS;
-      if (cloudData.prevXP === undefined) cloudData.prevXP = 0;
-      // クラウドのtotalXPがローカルより大きい、または履歴が多い場合に復元
-      const localHistoryCount = Object.keys(data.history || {}).length;
-      const cloudHistoryCount = Object.keys(cloudData.history || {}).length;
-      if ((cloudData.totalXP || 0) > (data.totalXP || 0) || cloudHistoryCount > localHistoryCount) {
+      if (!cloudData.history)    cloudData.history    = {};
+      const localCount = Object.keys(data.history || {}).length;
+      const cloudCount = Object.keys(cloudData.history || {}).length;
+      // クラウドの方が履歴が多い場合のみ復元
+      if (cloudCount > localCount) {
         setData(cloudData);
-        setTodayChecked(cloudData.history?.[todayKey()] || {});
-        localStorage.setItem(SKEY, JSON.stringify(cloudData));
+        setTodayChecked(cloudData.history[todayKey()] || {});
+        localStorage.setItem("questTracker_v6", JSON.stringify(cloudData));
         showToast("☁️ クラウドから復元しました");
       }
     });
   }, []);
 
-  function calcStats(checked, categories, prevXP) {
-    let todayXP = 0;
-    const catXP = {};
+  function calcTodayXP(checked, categories) {
+    const dc = categories.find(c => c.id === "daily");
+    let xp = 0;
     for (const cat of categories) {
       for (const m of cat.missions) {
         if (!checked[m.id] || m.dailyPart) continue;
-        todayXP += m.xp;
-        if (cat.id !== "daily" && m.xp > 0) {
-          catXP[cat.id] = (catXP[cat.id] || 0) + m.xp;
-        }
+        xp += m.xp;
       }
     }
-    const dc = categories.find(c => c.id === "daily");
-    const dailyDone = dc?.missions.every(m => !!checked[m.id]);
-    if (dailyDone) todayXP += dc.bonus || 10;
-    const totalXP = Math.max(0, prevXP + todayXP);
-    const totalG  = Math.floor(totalXP / 10);
-    return { totalXP, totalG, catXP, dailyDone };
+    if (dc?.missions.every(m => !!checked[m.id])) xp += dc.bonus || 10;
+    return xp;
   }
 
   function handleCheck(missionId, xp, isDailyPart) {
@@ -893,35 +946,30 @@ function App() {
     const newChecked = { ...todayChecked };
     if (alreadyChecked) { delete newChecked[missionId]; }
     else { newChecked[missionId] = true; }
-    const prevXP = data.prevXP ?? 0;
-    const prevStats = calcStats(todayChecked, data.categories, prevXP);
-    const nextStats = calcStats(newChecked,   data.categories, prevXP);
-    const xpDiff = nextStats.totalXP - prevStats.totalXP;
-    const gDiff  = nextStats.totalG  - prevStats.totalG;
-    if (!prevStats.dailyDone && nextStats.dailyDone) {
-      const dc = data.categories.find(c=>c.id==="daily");
+
+    const dc = data.categories.find(c => c.id === "daily");
+    const prevDailyDone = dc?.missions.every(m => !!todayChecked[m.id]);
+    const nextDailyDone = dc?.missions.every(m => !!newChecked[m.id]);
+
+    const prevXP = calcTodayXP(todayChecked, data.categories);
+    const nextXP = calcTodayXP(newChecked,   data.categories);
+    const diff = nextXP - prevXP;
+
+    if (!prevDailyDone && nextDailyDone) {
       soundDailyBonus();
       showToast(`🌿 毎日ボーナス! +${dc?.bonus||10}XP`);
     } else if (alreadyChecked) {
       soundUncheck();
     } else if (xp < 0) {
       soundPenalty();
-      showToast(`${xpDiff}XP ${gDiff}G`);
+      showToast(`${diff}XP`);
     } else {
       soundCheck();
-      if (xpDiff !== 0) showToast(`+${xpDiff}XP +${gDiff}G`);
+      if (diff !== 0) showToast(`+${diff}XP`);
     }
-    const newCatXP = { ...data.prevCatXP };
-    for (const [k,v] of Object.entries(nextStats.catXP)) {
-      newCatXP[k] = (newCatXP[k] || 0) + v;
-    }
-    const newData = {
-      ...data,
-      totalXP: nextStats.totalXP,
-      totalG:  nextStats.totalG,
-      catXP:   newCatXP,
-      history: { ...data.history, [today]: newChecked },
-    };
+
+    const newHistory = { ...data.history, [todayKey()]: newChecked };
+    const newData = { ...data, history: newHistory };
     setTodayChecked(newChecked);
     setData(newData);
     save(newData);
@@ -929,29 +977,19 @@ function App() {
 
   const [lastDate, setLastDate] = useState(todayKey());
 
-  // ── 日付またぎ検知（useEffect + focusイベント）──
+  // ── 日付またぎ検知（シンプル版：historyベースなので清算不要）──
   useEffect(() => {
     const checkDate = () => {
       const today = todayKey();
-      if (data.lastUpdateDate !== today) {
-        const newPrevXP = data.totalXP;
-        const newPrevCatXP = { ...data.catXP };
-        const newData = {
-          ...data,
-          prevXP: newPrevXP,
-          prevCatXP: newPrevCatXP,
-          lastUpdateDate: today,
-        };
-        setData(newData);
+      if (lastDate !== today) {
         setTodayChecked({});
         setLastDate(today);
-        save(newData);
       }
     };
     checkDate();
     window.addEventListener('focus', checkDate);
     return () => window.removeEventListener('focus', checkDate);
-  }, [data.lastUpdateDate, data.totalXP]);
+  }, [lastDate]);
 
   function handleSaveCategories(newCats){
     const newData = { ...data, categories:newCats };
@@ -959,11 +997,8 @@ function App() {
     setShowEdit(false); showToast("💾 保存しました！");
   }
 
-
-  const lvInfo = getLvInfo(data.totalXP);
   const [sceneIdx, setSceneIdx] = useState(0);
   const scene = SCENES[sceneIdx];
-  // ヘッダー高さ: 景観80 + ステータス約78 + タブ約38 = 196
   const HEADER_H = 196;
 
   return (
@@ -988,10 +1023,10 @@ function App() {
             <div style={{ flex:1 }}>
               <div style={{ display:"flex",justifyContent:"space-between",marginBottom:4 }}>
                 <span style={{ fontSize:10,color:scene.accent }}>LV.{lvInfo.level}</span>
-                <span style={{ fontSize:9,color:scene.accent }}>💰{data.totalG}G</span>
+                <span style={{ fontSize:9,color:scene.accent }}>💰{totalG}G</span>
               </div>
               <SmoothBar current={lvInfo.currentXP} total={lvInfo.neededXP} color={scene.accent} height={13}/>
-              <div style={{ fontSize:7,color:"#FFFFFF99",marginTop:3 }}>{lvInfo.currentXP}/{lvInfo.neededXP} XP（計{data.totalXP}）</div>
+              <div style={{ fontSize:7,color:"#FFFFFF99",marginTop:3 }}>{lvInfo.currentXP}/{lvInfo.neededXP} XP（計{totalXP}）</div>
             </div>
           </div>
         </div>
@@ -1000,6 +1035,7 @@ function App() {
         <div style={{ display:"flex", background:scene.tabBg, borderBottom:`3px solid ${C.border}`, transition:"background 0.6s ease" }}>
           {[{key:"quest",label:"クエスト"},{key:"status",label:"ステータス"},{key:"log",label:"ログ"}].map(t=>(
             <button key={t.key} onClick={()=>setTab(t.key)} style={{
+
               flex:1, padding:"10px 4px",
               background:tab===t.key?scene.tabActive:"transparent",
               border:"none", borderBottom:tab===t.key?`3px solid ${scene.accent}`:"3px solid transparent",
@@ -1062,10 +1098,10 @@ function App() {
             <div style={{ ...pb(C.border,C.panel),padding:14,marginBottom:12 }}>
               <div style={{ fontSize:8,color:C.textMuted,marginBottom:12 }}>▶ PLAYER STATUS</div>
               {[
-                {label:"LEVEL",  value:`LV.${lvInfo.level}`,              color:C.tech},
-                {label:"TOTAL XP",value:`${data.totalXP} XP`,             color:C.xpColor},
-                {label:"GOLD",   value:`${data.totalG} G`,                color:C.gold},
-                {label:"NEXT LV",value:`残り${lvInfo.neededXP-lvInfo.currentXP}XP`,color:C.green},
+                {label:"LEVEL",   value:`LV.${lvInfo.level}`,                    color:C.tech},
+                {label:"TOTAL XP",value:`${totalXP} XP`,                         color:C.xpColor},
+                {label:"GOLD",    value:`${totalG} G`,                            color:C.gold},
+                {label:"NEXT LV", value:`残り${lvInfo.neededXP-lvInfo.currentXP}XP`, color:C.green},
               ].map(row=>(
                 <div key={row.label} style={{ display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:`1px dashed ${C.borderLight}` }}>
                   <span style={{ fontSize:7,color:C.textMuted }}>{row.label}</span>
@@ -1075,14 +1111,13 @@ function App() {
               <div style={{ marginTop:12 }}>
                 <div style={{ fontSize:7,color:C.textMuted,marginBottom:6 }}>XP [{lvInfo.currentXP}/{lvInfo.neededXP}]</div>
                 <SmoothBar current={lvInfo.currentXP} total={lvInfo.neededXP} color={C.xpColor} height={16}/>
-              </div>
-            </div>
+              </div>            </div>
 
             <div style={{ ...pb(C.border,C.panel),padding:14,marginBottom:12 }}>
               <div style={{ fontSize:8,color:C.textMuted,marginBottom:14 }}>▶ STATS</div>
               {data.categories.filter(c=>c.id!=="daily").map(cat=>{
-                const catXP=data.catXP?.[cat.id]||0;
-                const catLv=getCatLv(catXP);
+                const cxp=catXP[cat.id]||0;
+                const catLv=getCatLv(cxp);
                 return (
                   <div key={cat.id} style={{ marginBottom:16 }}>
                     <div style={{ display:"flex",justifyContent:"space-between",marginBottom:5 }}>
@@ -1090,7 +1125,7 @@ function App() {
                       <span style={{ fontSize:8,color:cat.color }}>LV.{catLv.level}</span>
                     </div>
                     <SmoothBar current={catLv.currentXP} total={catLv.neededXP} color={cat.color} height={14}/>
-                    <div style={{ fontSize:7,color:C.textMuted,marginTop:3,textAlign:"right" }}>{catLv.currentXP}/{catLv.neededXP} XP（計{catXP}）</div>
+                    <div style={{ fontSize:7,color:C.textMuted,marginTop:3,textAlign:"right" }}>{catLv.currentXP}/{catLv.neededXP} XP（計{cxp}）</div>
                   </div>
                 );
               })}
@@ -1162,11 +1197,8 @@ function App() {
   );
 }
 
-
     ReactDOM.createRoot(document.getElementById('root')).render(
-      React.createElement(React.StrictMode, null,
-        React.createElement(App, null)
-      )
+      React.createElement(React.StrictMode, null, React.createElement(App, null))
     );
   </script>
 </body>
