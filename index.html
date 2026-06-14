@@ -664,7 +664,7 @@ function load() {
 }
 function save(d) {
   try { localStorage.setItem(SKEY,JSON.stringify(d)); } catch{}
-  supabaseSave(d); // クラウドにも保存
+  supabaseSave(d);
 }
 
 function Toast({ msg }) {
@@ -766,7 +766,6 @@ function EditModal({ categories, onSave, onClose }) {
 const SUPABASE_URL = "https://emnocrhggqiijnvpxfmk.supabase.co";
 const SUPABASE_KEY = "sb_publishable_pbL4NNHL-393xiC7LJKUDA_t4kGZxKz";
 
-// 匿名ユーザーID（端末固有・永続）
 function getAnonId() {
   let id = localStorage.getItem("questlife_anon_id");
   if (!id) {
@@ -776,35 +775,22 @@ function getAnonId() {
   return id;
 }
 
-// Supabaseからデータを読み込む
 async function supabaseLoad() {
   try {
     const userId = getAnonId();
     const res = await fetch(
-      `${SUPABASE_URL}/rest/v1/user_data?user_id=eq.${userId}&select=data`,
-      {
-        headers: {
-          "apikey": SUPABASE_KEY,
-          "Authorization": `Bearer ${SUPABASE_KEY}`,
-          "Content-Type": "application/json",
-        }
-      }
+      `${SUPABASE_URL}/rest/v1/user_data?user_id=eq.${encodeURIComponent(userId)}&select=data`,
+      { headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${SUPABASE_KEY}` } }
     );
     if (!res.ok) return null;
     const rows = await res.json();
-    if (rows.length === 0) return null;
-    return rows[0].data;
-  } catch(e) {
-    console.error("Supabase load error:", e);
-    return null;
-  }
+    return rows.length > 0 ? rows[0].data : null;
+  } catch(e) { console.error("load error:", e); return null; }
 }
 
-// Supabaseへデータを保存（upsert）
 async function supabaseSave(data) {
   try {
     const userId = getAnonId();
-    const payload = { user_id: userId, data: data, updated_at: new Date().toISOString() };
     await fetch(`${SUPABASE_URL}/rest/v1/user_data`, {
       method: "POST",
       headers: {
@@ -813,11 +799,9 @@ async function supabaseSave(data) {
         "Content-Type": "application/json",
         "Prefer": "resolution=merge-duplicates",
       },
-      body: JSON.stringify(payload),
+      body: JSON.stringify({ user_id: userId, data: data, updated_at: new Date().toISOString() }),
     });
-  } catch(e) {
-    console.error("Supabase save error:", e);
-  }
+  } catch(e) { console.error("save error:", e); }
 }
 
 function App() {
@@ -855,22 +839,24 @@ function App() {
   }
 
 
-  // ── Supabaseからデータを復元（初回起動時）──
+  // ── Supabase初回復元（マウント時のみ）──
+  const syncDoneRef = useRef(false);
   useEffect(() => {
+    if (syncDoneRef.current) return;
+    syncDoneRef.current = true;
     supabaseLoad().then(cloudData => {
       if (!cloudData) return;
-      // クラウドのデータをlocalStorageと比較してより新しい方を使う
-      const localXP = data.totalXP || 0;
-      const cloudXP = cloudData.totalXP || 0;
-      if (cloudXP >= localXP) {
-        // クラウドの方が進んでいる（または同じ）→ クラウドを優先
-        if (!cloudData.catXP)     cloudData.catXP = {};
-        if (!cloudData.prevCatXP) cloudData.prevCatXP = {};
-        if (!cloudData.categories) cloudData.categories = DEFAULT_CATS;
-        if (cloudData.prevXP === undefined) cloudData.prevXP = 0;
+      if (!cloudData.catXP)      cloudData.catXP = {};
+      if (!cloudData.prevCatXP)  cloudData.prevCatXP = {};
+      if (!cloudData.categories) cloudData.categories = DEFAULT_CATS;
+      if (cloudData.prevXP === undefined) cloudData.prevXP = 0;
+      // クラウドのtotalXPがローカルより大きい、または履歴が多い場合に復元
+      const localHistoryCount = Object.keys(data.history || {}).length;
+      const cloudHistoryCount = Object.keys(cloudData.history || {}).length;
+      if ((cloudData.totalXP || 0) > (data.totalXP || 0) || cloudHistoryCount > localHistoryCount) {
         setData(cloudData);
         setTodayChecked(cloudData.history?.[todayKey()] || {});
-        save(cloudData);
+        localStorage.setItem(SKEY, JSON.stringify(cloudData));
         showToast("☁️ クラウドから復元しました");
       }
     });
@@ -942,15 +928,30 @@ function App() {
   }
 
   const [lastDate, setLastDate] = useState(todayKey());
-  if (lastDate !== todayKey()) {
-    const newPrevXP = data.totalXP;
-    const newPrevCatXP = { ...data.catXP };
-    const newData = { ...data, prevXP: newPrevXP, prevCatXP: newPrevCatXP };
-    setData(newData);
-    save(newData);
-    setTodayChecked({});
-    setLastDate(todayKey());
-  }
+
+  // ── 日付またぎ検知（useEffect + focusイベント）──
+  useEffect(() => {
+    const checkDate = () => {
+      const today = todayKey();
+      if (data.lastUpdateDate !== today) {
+        const newPrevXP = data.totalXP;
+        const newPrevCatXP = { ...data.catXP };
+        const newData = {
+          ...data,
+          prevXP: newPrevXP,
+          prevCatXP: newPrevCatXP,
+          lastUpdateDate: today,
+        };
+        setData(newData);
+        setTodayChecked({});
+        setLastDate(today);
+        save(newData);
+      }
+    };
+    checkDate();
+    window.addEventListener('focus', checkDate);
+    return () => window.removeEventListener('focus', checkDate);
+  }, [data.lastUpdateDate, data.totalXP]);
 
   function handleSaveCategories(newCats){
     const newData = { ...data, categories:newCats };
@@ -958,39 +959,6 @@ function App() {
     setShowEdit(false); showToast("💾 保存しました！");
   }
 
-  // ── データエクスポート（JSONダウンロード）──
-  function handleExport() {
-    const json = JSON.stringify(data, null, 2);
-    const blob = new Blob([json], { type:"application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `questlife_backup_${todayKey()}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-    showToast("📦 バックアップ完了！");
-  }
-
-  // ── データインポート（JSONファイル読み込み）──
-  const importRef = useRef(null);
-  function handleImport(e) {
-    const file = e.target.files[0]; if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (ev) => {
-      try {
-        const imported = JSON.parse(ev.target.result);
-        if (!imported.totalXP === undefined || !imported.history) throw new Error("invalid");
-        setData(imported);
-        setTodayChecked(imported.history[todayKey()] || {});
-        save(imported);
-        showToast("✅ インポート成功！");
-      } catch {
-        showToast("❌ ファイルが無効です");
-      }
-    };
-    reader.readAsText(file);
-    e.target.value = "";
-  }
 
   const lvInfo = getLvInfo(data.totalXP);
   const [sceneIdx, setSceneIdx] = useState(0);
@@ -1050,12 +1018,7 @@ function App() {
           <div style={{ padding:"0 10px" }}>
             <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,paddingTop:4 }}>
               <span style={{ fontSize:7,color:C.textMuted }}>📅 {today}</span>
-              <div style={{ display:"flex", gap:6 }}>
-                <button onClick={handleExport} style={{ ...PX,fontSize:6,...pb(C.border,"#1A5276"),color:C.white,padding:"5px 8px",cursor:"pointer" }}>📦 保存</button>
-                <button onClick={()=>importRef.current?.click()} style={{ ...PX,fontSize:6,...pb(C.border,"#6B4F10"),color:C.white,padding:"5px 8px",cursor:"pointer" }}>📂 読込</button>
-                <input ref={importRef} type="file" accept=".json" style={{display:"none"}} onChange={handleImport}/>
-                <button onClick={()=>setShowEdit(true)} style={{ ...PX,fontSize:6,...pb(C.border,C.grassDark),color:C.white,padding:"5px 8px",cursor:"pointer" }}>⚙ 編集</button>
-              </div>
+              <button onClick={()=>setShowEdit(true)} style={{ ...PX,fontSize:6,...pb(C.border,C.grassDark),color:C.white,padding:"5px 10px",cursor:"pointer" }}>⚙ 編集</button>
             </div>
             {data.categories.map(cat=>{
               const dailyIds=cat.id==="daily"?cat.missions.map(m=>m.id):[];
@@ -1200,7 +1163,6 @@ function App() {
 }
 
 
-    // Mount
     ReactDOM.createRoot(document.getElementById('root')).render(
       React.createElement(React.StrictMode, null,
         React.createElement(App, null)
