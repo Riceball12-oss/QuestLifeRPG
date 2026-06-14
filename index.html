@@ -736,7 +736,236 @@ function save(d) {
 }
 
 
-function Toast({ msg }) {
+// ═══ グラフ・進捗コンポーネント ═══
+
+// 日別XP計算ヘルパー
+function calcDayXP(checked, categories) {
+  if (!checked) return 0;
+  const dc = categories.find(c => c.id === "daily");
+  let xp = 0;
+  for (const cat of categories) {
+    for (const m of cat.missions) {
+      if (!checked[m.id] || m.dailyPart) continue;
+      xp += m.xp;
+    }
+  }
+  if (dc?.missions.every(m => !!checked[m.id])) xp += dc.bonus || 10;
+  return Math.max(0, xp);
+}
+
+// ピクセル棒グラフ（週別）
+function WeekBarChart({ history, categories }) {
+  const days = ["月","火","水","木","金","土","日"];
+  const today = new Date();
+  const dow = today.getDay(); // 0=日
+  const mondayOffset = dow === 0 ? 6 : dow - 1;
+
+  const weekData = Array.from({length:7}, (_,i) => {
+    const d = new Date(today);
+    d.setDate(today.getDate() - mondayOffset + i);
+    const key = d.toISOString().slice(0,10);
+    const xp = calcDayXP(history[key], categories);
+    const isToday = key === today.toISOString().slice(0,10);
+    const isFuture = d > today;
+    return { label: days[i], xp, isToday, isFuture, key };
+  });
+
+  const maxXP = Math.max(...weekData.map(d => d.xp), 10);
+  const BAR_H = 80;
+
+  return (
+    <div style={{ ...pb(C.border,C.panel), padding:"12px 10px", marginBottom:12 }}>
+      <div style={{ fontSize:8, color:C.textMuted, marginBottom:12 }}>▶ 今週の獲得XP</div>
+      <div style={{ display:"flex", alignItems:"flex-end", gap:4, height:BAR_H+28, paddingBottom:20, position:"relative" }}>
+        {/* グリッドライン */}
+        {[0.25,0.5,0.75,1].map(r => (
+          <div key={r} style={{
+            position:"absolute", left:0, right:0,
+            bottom: 20 + BAR_H*r,
+            borderTop:`1px dashed ${C.borderLight}44`,
+          }}/>
+        ))}
+        {weekData.map((d,i) => {
+          const barH = d.isFuture ? 0 : Math.max(d.xp > 0 ? 4 : 0, Math.round((d.xp / maxXP) * BAR_H));
+          const color = d.isToday ? "#FFD700" : d.xp > 0 ? C.grass : C.borderLight;
+          return (
+            <div key={i} style={{ flex:1, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"flex-end", height:"100%", position:"relative" }}>
+              {d.xp > 0 && (
+                <div style={{ ...PX, fontSize:6, color:d.isToday?"#FFD700":C.textMuted, marginBottom:2, position:"absolute", bottom:20+barH }}>
+                  {d.xp}
+                </div>
+              )}
+              <div style={{
+                width:"100%", height:barH,
+                background:color,
+                border:`2px solid ${d.isToday?"#FFD700":color}`,
+                boxShadow: d.isToday ? `0 0 6px #FFD70088` : "none",
+                transition:"height 0.4s ease",
+                imageRendering:"pixelated",
+              }}/>
+              <div style={{ ...PX, fontSize:7, color:d.isToday?"#FFD700":C.textMuted, marginTop:4, position:"absolute", bottom:0 }}>
+                {d.label}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <div style={{ ...PX, fontSize:6, color:C.textMuted, textAlign:"right" }}>
+        今週合計: {weekData.reduce((s,d)=>s+d.xp,0)}XP
+      </div>
+    </div>
+  );
+}
+
+// 30日間折れ線グラフ
+function MonthLineChart({ history, categories }) {
+  const W = 320, H = 80, PAD = 10;
+  const points = [];
+  const today = new Date();
+
+  for (let i = 29; i >= 0; i--) {
+    const d = new Date(today);
+    d.setDate(today.getDate() - i);
+    const key = d.toISOString().slice(0,10);
+    points.push({ key, xp: calcDayXP(history[key], categories), i: 29-i });
+  }
+
+  const maxXP = Math.max(...points.map(p => p.xp), 10);
+  const toX = i => PAD + (i / 29) * (W - PAD*2);
+  const toY = xp => H - PAD - (xp / maxXP) * (H - PAD*2);
+
+  const pathD = points.map((p,i) => `${i===0?"M":"L"}${toX(p.i).toFixed(1)},${toY(p.xp).toFixed(1)}`).join(" ");
+  const areaD = pathD + ` L${toX(29)},${H-PAD} L${toX(0)},${H-PAD} Z`;
+
+  const todayPt = points[points.length-1];
+
+  return (
+    <div style={{ ...pb(C.border,C.panel), padding:"12px 10px", marginBottom:12 }}>
+      <div style={{ fontSize:8, color:C.textMuted, marginBottom:10 }}>▶ 30日間XP推移</div>
+      <svg width="100%" viewBox={`0 0 ${W} ${H+10}`} style={{ overflow:"visible" }}>
+        {/* グリッド */}
+        {[0.25,0.5,0.75,1].map(r => (
+          <line key={r} x1={PAD} y1={toY(maxXP*r)} x2={W-PAD} y2={toY(maxXP*r)}
+            stroke={C.borderLight} strokeWidth="0.5" strokeDasharray="3,3" opacity="0.5"/>
+        ))}
+        {/* エリア */}
+        <path d={areaD} fill={C.grass} opacity="0.15"/>
+        {/* ライン */}
+        <path d={pathD} fill="none" stroke={C.grass} strokeWidth="2" strokeLinejoin="round"/>
+        {/* 今日の点 */}
+        <circle cx={toX(29)} cy={toY(todayPt.xp)} r="4" fill="#FFD700" stroke={C.border} strokeWidth="1.5"/>
+        {/* ラベル */}
+        <text x={PAD} y={H+8} fill={C.textMuted} fontSize="7" fontFamily="monospace">30日前</text>
+        <text x={W-PAD} y={H+8} fill={C.textMuted} fontSize="7" fontFamily="monospace" textAnchor="end">今日</text>
+        <text x={PAD} y={PAD} fill={C.textMuted} fontSize="7" fontFamily="monospace">{maxXP}XP</text>
+      </svg>
+    </div>
+  );
+}
+
+// カテゴリ別積み上げ棒グラフ（週別）
+function CategoryStackChart({ history, categories }) {
+  const cats = categories.filter(c => c.id !== "daily");
+  const today = new Date();
+  const dow = today.getDay();
+  const mondayOffset = dow === 0 ? 6 : dow - 1;
+  const days = ["月","火","水","木","金","土","日"];
+
+  const weekData = Array.from({length:7}, (_,i) => {
+    const d = new Date(today);
+    d.setDate(today.getDate() - mondayOffset + i);
+    const key = d.toISOString().slice(0,10);
+    const checked = history[key] || {};
+    const isFuture = d > today;
+    const catXPs = {};
+    if (!isFuture) {
+      for (const cat of cats) {
+        let xp = 0;
+        for (const m of cat.missions) {
+          if (checked[m.id] && !m.dailyPart && m.xp > 0) xp += m.xp;
+        }
+        catXPs[cat.id] = xp;
+      }
+    }
+    return { label: days[i], catXPs, isToday: key === today.toISOString().slice(0,10), isFuture };
+  });
+
+  const maxTotal = Math.max(...weekData.map(d => Object.values(d.catXPs).reduce((s,v)=>s+v,0)), 10);
+  const BAR_H = 80;
+
+  return (
+    <div style={{ ...pb(C.border,C.panel), padding:"12px 10px", marginBottom:12 }}>
+      <div style={{ fontSize:8, color:C.textMuted, marginBottom:10 }}>▶ カテゴリ別XP（今週）</div>
+      <div style={{ display:"flex", alignItems:"flex-end", gap:4, height:BAR_H+20, paddingBottom:20 }}>
+        {weekData.map((d,i) => {
+          const total = Object.values(d.catXPs).reduce((s,v)=>s+v,0);
+          const totalH = Math.round((total / maxTotal) * BAR_H);
+          let cumH = 0;
+          return (
+            <div key={i} style={{ flex:1, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"flex-end", height:"100%" }}>
+              <div style={{ width:"100%", height:totalH, position:"relative", display:"flex", flexDirection:"column-reverse" }}>
+                {cats.map(cat => {
+                  const xp = d.catXPs[cat.id] || 0;
+                  const h = Math.round((xp / maxTotal) * BAR_H);
+                  if (h === 0) return null;
+                  return (
+                    <div key={cat.id} style={{
+                      width:"100%", height:h,
+                      background:cat.color,
+                      border:`1px solid ${cat.color}CC`,
+                    }}/>
+                  );
+                })}
+              </div>
+              <div style={{ ...PX, fontSize:7, color:d.isToday?"#FFD700":C.textMuted, marginTop:4 }}>{d.label}</div>
+            </div>
+          );
+        })}
+      </div>
+      {/* 凡例 */}
+      <div style={{ display:"flex", flexWrap:"wrap", gap:"6px 12px", marginTop:8 }}>
+        {cats.map(cat => (
+          <div key={cat.id} style={{ display:"flex", alignItems:"center", gap:4 }}>
+            <div style={{ width:8, height:8, background:cat.color }}/>
+            <span style={{ ...PX, fontSize:6, color:C.textMuted }}>{cat.label}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// 今日の進捗リング
+function TodayProgress({ todayChecked, categories }) {
+  const nonDaily = categories.filter(c => c.id !== "daily").flatMap(c => c.missions);
+  const done = nonDaily.filter(m => todayChecked[m.id]).length;
+  const total = nonDaily.length;
+  const pct = total === 0 ? 0 : Math.round((done / total) * 100);
+
+  const R = 14, CIRC = 2 * Math.PI * R;
+  const dash = (pct / 100) * CIRC;
+
+  return (
+    <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+      <svg width="36" height="36" viewBox="0 0 36 36">
+        <circle cx="18" cy="18" r={R} fill="none" stroke={C.borderLight} strokeWidth="3"/>
+        <circle cx="18" cy="18" r={R} fill="none" stroke="#FFD700" strokeWidth="3"
+          strokeDasharray={`${dash} ${CIRC}`}
+          strokeLinecap="square"
+          transform="rotate(-90 18 18)"
+          style={{ transition:"stroke-dasharray 0.5s ease" }}
+        />
+        <text x="18" y="22" textAnchor="middle" fill="#FFD700" fontSize="8" fontFamily="monospace">{pct}%</text>
+      </svg>
+      <div style={{ ...PX, fontSize:6, color:"#FFFFFF99", lineHeight:1.8 }}>
+        <div>{done}/{total}</div>
+        <div>完了</div>
+      </div>
+    </div>
+  );
+}
+
+
   if(!msg) return null;
   return (
     <div style={{
@@ -831,46 +1060,31 @@ function EditModal({ categories, onSave, onClose }) {
 }
 
 
-// ═══ Supabase ═══
 const SUPABASE_URL = "https://emnocrhggqiijnvpxfmk.supabase.co";
 const SUPABASE_KEY = "sb_publishable_pbL4NNHL-393xiC7LJKUDA_t4kGZxKz";
-
 function getAnonId() {
   let id = localStorage.getItem("questlife_anon_id");
-  if (!id) {
-    id = "anon_" + Math.random().toString(36).slice(2) + Date.now().toString(36);
-    localStorage.setItem("questlife_anon_id", id);
-  }
+  if (!id) { id = "anon_" + Math.random().toString(36).slice(2) + Date.now().toString(36); localStorage.setItem("questlife_anon_id", id); }
   return id;
 }
-
 async function supabaseLoad() {
   try {
-    const res = await fetch(
-      `${SUPABASE_URL}/rest/v1/user_data?user_id=eq.${encodeURIComponent(getAnonId())}&select=data`,
-      { headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${SUPABASE_KEY}` } }
-    );
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/user_data?user_id=eq.${encodeURIComponent(getAnonId())}&select=data`,
+      { headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${SUPABASE_KEY}` } });
     if (!res.ok) return null;
     const rows = await res.json();
     return rows.length > 0 ? rows[0].data : null;
   } catch(e) { return null; }
 }
-
 async function supabaseSave(data) {
   try {
     await fetch(`${SUPABASE_URL}/rest/v1/user_data`, {
       method: "POST",
-      headers: {
-        "apikey": SUPABASE_KEY,
-        "Authorization": `Bearer ${SUPABASE_KEY}`,
-        "Content-Type": "application/json",
-        "Prefer": "resolution=merge-duplicates",
-      },
+      headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates" },
       body: JSON.stringify({ user_id: getAnonId(), data: data, updated_at: new Date().toISOString() }),
     });
   } catch(e) {}
 }
-
 function App() {
   const [data, setData] = useState(() => {
     const d = load();
@@ -901,7 +1115,6 @@ function App() {
 
   // 今日分のXP計算（トースト表示用）
 
-  // ── Supabase初回復元（historyの件数で比較）──
   const syncDoneRef = useRef(false);
   useEffect(() => {
     if (syncDoneRef.current) return;
@@ -912,7 +1125,6 @@ function App() {
       if (!cloudData.history)    cloudData.history    = {};
       const localCount = Object.keys(data.history || {}).length;
       const cloudCount = Object.keys(cloudData.history || {}).length;
-      // クラウドの方が履歴が多い場合のみ復元
       if (cloudCount > localCount) {
         setData(cloudData);
         setTodayChecked(cloudData.history[todayKey()] || {});
@@ -921,7 +1133,6 @@ function App() {
       }
     });
   }, []);
-
   function calcTodayXP(checked, categories) {
     const dc = categories.find(c => c.id === "daily");
     let xp = 0;
@@ -1028,6 +1239,7 @@ function App() {
               <SmoothBar current={lvInfo.currentXP} total={lvInfo.neededXP} color={scene.accent} height={13}/>
               <div style={{ fontSize:7,color:"#FFFFFF99",marginTop:3 }}>{lvInfo.currentXP}/{lvInfo.neededXP} XP（計{totalXP}）</div>
             </div>
+            <TodayProgress todayChecked={todayChecked} categories={data.categories}/>
           </div>
         </div>
 
@@ -1151,14 +1363,14 @@ function App() {
 
         {tab==="log"&&(
           <div style={{ padding:"4px 10px" }}>
-            <div style={{ fontSize:8,color:C.textMuted,marginBottom:12 }}>▶ ACTIVITY LOG</div>
+            <WeekBarChart history={data.history} categories={data.categories}/>
+            <MonthLineChart history={data.history} categories={data.categories}/>
+            <CategoryStackChart history={data.history} categories={data.categories}/>
+            <div style={{ fontSize:8,color:C.textMuted,marginBottom:12,marginTop:4 }}>▶ ACTIVITY LOG</div>
             {Object.entries(data.history).sort(([a],[b])=>b.localeCompare(a)).slice(0,30).map(([date,checked])=>{
-              // ミッションIDからXPを逆引きして合計
               const missionMap = {};
               for (const cat of data.categories) {
-                for (const m of cat.missions) {
-                  missionMap[m.id] = m;
-                }
+                for (const m of cat.missions) missionMap[m.id] = m;
               }
               let xpSum = 0;
               const checkedIds = Object.keys(checked).filter(id => checked[id]);
@@ -1170,7 +1382,6 @@ function App() {
               const allDaily = dailyCat?.missions.every(m=>checked[m.id]);
               const bonus = allDaily ? dailyCat?.bonus||10 : 0;
               const total = xpSum + bonus;
-              // 完了件数（毎日タスク除く）
               const nonDailyIds = new Set(
                 data.categories.filter(c=>c.id!=="daily").flatMap(c=>c.missions.map(m=>m.id))
               );
