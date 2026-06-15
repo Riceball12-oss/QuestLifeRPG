@@ -1203,11 +1203,9 @@ function App() {
     if (!d.history)    d.history    = {};
     return d;
   });
-  const [todayChecked, setTodayChecked] = useState(() => {
-    const d = load();
-    const today = todayKey();
-    return (d.history || {})[today] || {};
-  });
+
+  // todayCheckedはstateではなく毎回導出（日付またぎが自動解決される）
+  const todayChecked = (data.history || {})[todayKey()] || {};
 
   const [tab,setTab] = useState("quest");
   const [toast,setToast] = useState(null);
@@ -1238,8 +1236,8 @@ function App() {
       const localCount = Object.keys(data.history || {}).length;
       const cloudCount = Object.keys(cloudData.history || {}).length;
       if (cloudCount > localCount) {
+        // dataごと更新（todayCheckedは自動再導出される）
         setData(cloudData);
-        setTodayChecked(cloudData.history[todayKey()] || {});
         localStorage.setItem("questTracker_v6", JSON.stringify(cloudData));
         showToast("☁️ クラウドから復元しました");
       }
@@ -1273,7 +1271,6 @@ function App() {
     const dc = data.categories.find(c => c.id === "daily");
     const prevDailyDone = dc?.missions.every(m => !!todayChecked[m.id]);
     const nextDailyDone = dc?.missions.every(m => !!newChecked[m.id]);
-
     const prevXP = calcTodayXP(todayChecked, data.categories);
     const nextXP = calcTodayXP(newChecked,   data.categories);
     const diff = nextXP - prevXP;
@@ -1291,43 +1288,11 @@ function App() {
       if (diff !== 0) showToast(`+${diff}XP`);
     }
 
-    const newHistory = { ...data.history, [todayKey()]: newChecked };
-    const newData = { ...data, history: newHistory };
-    setTodayChecked(newChecked);
+    // historyを直接更新（todayCheckedは自動的に再導出される）
+    const newData = { ...data, history: { ...data.history, [todayKey()]: newChecked } };
     setData(newData);
     save(newData);
   }
-
-  // ── 日付またぎ検知（最も確実な実装）──
-  // lastDateをrefで管理し、interval・focus・visibilitychangeの3重チェック
-  const lastDateRef = useRef(todayKey());
-  useEffect(() => {
-    const checkDate = () => {
-      const today = todayKey();
-      if (lastDateRef.current !== today) {
-        lastDateRef.current = today;
-        // 今日のチェック状態をhistoryから取得（なければ空）
-        setTodayChecked(prev => {
-          // すでに今日のデータがあればそのまま、なければリセット
-          return data.history?.[today] || {};
-        });
-      }
-    };
-    // 1. 1分ごとにポーリング（タブ開きっぱなし対策）
-    const timer = setInterval(checkDate, 60 * 1000);
-    // 2. タブがアクティブになったとき
-    window.addEventListener('focus', checkDate);
-    // 3. バックグラウンドから復帰したとき（スマホで最重要）
-    document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible') checkDate();
-    });
-    // 初回チェック
-    checkDate();
-    return () => {
-      clearInterval(timer);
-      window.removeEventListener('focus', checkDate);
-    };
-  }, [data.history]);
 
   function handleSaveCategories(newCats){
     const newData = { ...data, categories:newCats };
