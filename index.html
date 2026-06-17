@@ -683,7 +683,13 @@ const DEFAULT_CATS = [
 const SLEEP_IDS = ["sleep5","sleep7","sleep8","sleep9"];
 const SKEY = "questTracker_v6"; // バージョン更新で旧データと分離
 
-function todayKey() { return new Date().toISOString().slice(0,10); }
+// ローカルタイムゾーン基準で日付キーを生成（UTC基準だと深夜0:00〜9:00台にJSTでズレるため）
+function todayKey(d = new Date()) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
 
 // ═══ historyから全XPを再計算（single source of truth）═══
 function recalcFromHistory(history, categories) {
@@ -710,12 +716,51 @@ function recalcFromHistory(history, categories) {
       }
     }
     // 毎日ボーナス
-    if (dc?.missions.every(m => checked[m.id])) dayXP += dc.bonus || 10;
-    totalXP += dayXP;
+    if (dc?.missions.length > 0 && dc.missions.every(m => checked[m.id])) dayXP += dc.bonus || 10;
+    // 日次クリップ：その日の実績が0未満になっても翌日以降に負債を持ち越さない
+    // （calcDayXP / calcTodayXPと同じ規則に統一）
+    totalXP += Math.max(0, dayXP);
   }
 
   totalXP = Math.max(0, totalXP);
   return { totalXP, totalG: Math.floor(totalXP / 10), catXP };
+}
+
+// ═══ データ検証・サニタイズ：壊れたデータが原因のクラッシュ（緑画面）を防ぐ ═══
+function isValidCategories(categories) {
+  if (!Array.isArray(categories) || categories.length === 0) return false;
+  for (const cat of categories) {
+    if (!cat || typeof cat !== "object") return false;
+    if (typeof cat.id !== "string") return false;
+    if (!Array.isArray(cat.missions)) return false;
+    for (const m of cat.missions) {
+      if (!m || typeof m !== "object") return false;
+      if (typeof m.id !== "string") return false;
+      if (typeof m.xp !== "number" || Number.isNaN(m.xp)) return false;
+    }
+  }
+  return true;
+}
+function sanitizeCategories(categories) {
+  return isValidCategories(categories) ? categories : DEFAULT_CATS;
+}
+function sanitizeHistory(history) {
+  if (!history || typeof history !== "object" || Array.isArray(history)) return {};
+  const result = {};
+  for (const [date, checked] of Object.entries(history)) {
+    if (!checked || typeof checked !== "object" || Array.isArray(checked)) continue;
+    result[date] = checked;
+  }
+  return result;
+}
+function sanitizeLoadedData(raw) {
+  if (!raw || typeof raw !== "object") {
+    return { history: {}, categories: DEFAULT_CATS };
+  }
+  return {
+    history: sanitizeHistory(raw.history),
+    categories: sanitizeCategories(raw.categories),
+  };
 }
 
 function load() {
@@ -755,7 +800,7 @@ function calcDayXP(checked, categories) {
       xp += m.xp;
     }
   }
-  if (dc?.missions.every(m => !!checked[m.id])) xp += dc.bonus || 10;
+  if (dc?.missions.length > 0 && dc.missions.every(m => !!checked[m.id])) xp += dc.bonus || 10;
   return Math.max(0, xp);
 }
 
@@ -769,9 +814,9 @@ function WeekBarChart({ history, categories }) {
   const weekData = Array.from({length:7}, (_,i) => {
     const d = new Date(today);
     d.setDate(today.getDate() - mondayOffset + i);
-    const key = d.toISOString().slice(0,10);
+    const key = todayKey(d);
     const xp = calcDayXP(history[key], categories);
-    const isToday = key === today.toISOString().slice(0,10);
+    const isToday = key === todayKey(today);
     const isFuture = d > today;
     return { label: days[i], xp, isToday, isFuture, key };
   });
@@ -832,7 +877,7 @@ function MonthLineChart({ history, categories }) {
   for (let i = 29; i >= 0; i--) {
     const d = new Date(today);
     d.setDate(today.getDate() - i);
-    const key = d.toISOString().slice(0,10);
+    const key = todayKey(d);
     points.push({ key, xp: calcDayXP(history[key], categories), i: 29-i });
   }
 
@@ -880,7 +925,7 @@ function CategoryStackChart({ history, categories }) {
   const weekData = Array.from({length:7}, (_,i) => {
     const d = new Date(today);
     d.setDate(today.getDate() - mondayOffset + i);
-    const key = d.toISOString().slice(0,10);
+    const key = todayKey(d);
     const checked = history[key] || {};
     const isFuture = d > today;
     const catXPs = {};
@@ -893,7 +938,7 @@ function CategoryStackChart({ history, categories }) {
         catXPs[cat.id] = xp;
       }
     }
-    return { label: days[i], catXPs, isToday: key === today.toISOString().slice(0,10), isFuture };
+    return { label: days[i], catXPs, isToday: key === todayKey(today), isFuture };
   });
 
   const maxTotal = Math.max(...weekData.map(d => Object.values(d.catXPs).reduce((s,v)=>s+v,0)), 10);
@@ -1148,12 +1193,7 @@ async function supabaseSave(data) {
 }
 
 function App() {
-  const [data, setData] = useState(() => {
-    const d = load();
-    if (!d.categories) d.categories = DEFAULT_CATS;
-    if (!d.history)    d.history    = {};
-    return d;
-  });
+  const [data, setData] = useState(() => sanitizeLoadedData(load()));
 
   // todayCheckedはstateではなく毎回導出（日付またぎが自動解決される）
   const todayChecked = (data.history || {})[todayKey()] || {};
@@ -1182,8 +1222,7 @@ function App() {
     syncDoneRef.current = true;
     supabaseLoad().then(function(cloudData) {
       if (!cloudData) return;
-      if (!cloudData.categories) cloudData.categories = DEFAULT_CATS;
-      if (!cloudData.history)    cloudData.history    = {};
+      cloudData = sanitizeLoadedData(cloudData);
       const localCount = Object.keys(data.history || {}).length;
       const cloudCount = Object.keys(cloudData.history || {}).length;
       if (cloudCount > localCount) {
@@ -1203,7 +1242,7 @@ function App() {
         xp += m.xp;
       }
     }
-    if (dc?.missions.every(m => !!checked[m.id])) xp += dc.bonus || 10;
+    if (dc?.missions.length > 0 && dc.missions.every(m => !!checked[m.id])) xp += dc.bonus || 10;
     return xp;
   }
 
@@ -1220,8 +1259,8 @@ function App() {
     else { newChecked[missionId] = true; }
 
     const dc = data.categories.find(c => c.id === "daily");
-    const prevDailyDone = dc?.missions.every(m => !!todayChecked[m.id]);
-    const nextDailyDone = dc?.missions.every(m => !!newChecked[m.id]);
+    const prevDailyDone = dc?.missions.length > 0 && dc.missions.every(m => !!todayChecked[m.id]);
+    const nextDailyDone = dc?.missions.length > 0 && dc.missions.every(m => !!newChecked[m.id]);
     const prevXP = calcTodayXP(todayChecked, data.categories);
     const nextXP = calcTodayXP(newChecked,   data.categories);
     const diff = nextXP - prevXP;
@@ -1246,7 +1285,7 @@ function App() {
   }
 
   function handleSaveCategories(newCats){
-    const newData = { ...data, categories:newCats };
+    const newData = { ...data, categories: sanitizeCategories(newCats) };
     setData(newData); save(newData);
     setShowEdit(false); showToast("💾 保存しました！");
   }
@@ -1423,7 +1462,7 @@ function App() {
                 if (m && !m.dailyPart) xpSum += m.xp;
               }
               const dailyCat = data.categories.find(c=>c.id==="daily");
-              const allDaily = dailyCat?.missions.every(m=>checked[m.id]);
+              const allDaily = (dailyCat?.missions.length > 0) && dailyCat.missions.every(m=>checked[m.id]);
               const bonus = allDaily ? dailyCat?.bonus||10 : 0;
               const total = xpSum + bonus;
               const nonDailyIds = new Set(
@@ -1453,9 +1492,55 @@ function App() {
 }
 
 
+// ═══ エラーバウンダリ：未知のクラッシュが起きても緑の無表示画面にしない ═══
+class ErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false, errorMessage: "" };
+  }
+  static getDerivedStateFromError(error) {
+    return { hasError: true, errorMessage: (error && error.message) || String(error) };
+  }
+  componentDidCatch(error, info) {
+    try { console.error("QuestLifeRPG crashed:", error, info); } catch(e) {}
+  }
+  handleReset() {
+    try {
+      // 壊れている可能性のあるローカルデータを退避してから初期化する。
+      // 完全削除ではなく別キーに退避することで、データ自体は失わない。
+      const broken = localStorage.getItem(SKEY);
+      if (broken) localStorage.setItem(SKEY + "_broken_backup", broken);
+      localStorage.removeItem(SKEY);
+    } catch(e) {}
+    window.location.reload();
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div style={{
+          minHeight:"100vh", display:"flex", flexDirection:"column",
+          alignItems:"center", justifyContent:"center", padding:24,
+          fontFamily:"monospace", color:"#fff", background:"#1A2E0A", textAlign:"center",
+        }}>
+          <div style={{ fontSize:14, marginBottom:12 }}>⚠ 予期しないエラーが発生しました</div>
+          <div style={{ fontSize:10, marginBottom:20, opacity:0.8, maxWidth:320, wordBreak:"break-word" }}>
+            {this.state.errorMessage}
+          </div>
+          <button onClick={()=>this.handleReset()} style={{
+            fontFamily:"monospace", fontSize:11, padding:"10px 18px",
+            background:"#fff", color:"#1A2E0A", border:"none", cursor:"pointer",
+          }}>データを退避して再起動する</button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 const rootEl = document.getElementById("root");
 const root = ReactDOM.createRoot(rootEl);
-root.render(React.createElement(App));
+root.render(React.createElement(ErrorBoundary, null, React.createElement(App)));
+
 </script>
 </body>
 </html>
