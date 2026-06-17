@@ -1,59 +1,33 @@
 <!DOCTYPE html>
 <html lang="ja">
 <head>
-  <meta charset="UTF-8"/>
-  <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no"/>
-  <meta name="mobile-web-app-capable" content="yes"/>
-  <meta name="apple-mobile-web-app-capable" content="yes"/>
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
-  <meta name="apple-mobile-web-app-title" content="QuestLife"/>
-  <meta name="theme-color" content="#2D4A1E"/>
-  <link rel="preconnect" href="https://fonts.googleapis.com"/>
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
-  <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet"/>
-  <title>QuestLife ⚔️</title>
-  <style>
-    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
-    html,body{height:100%;background:#1A2E0A;overflow:hidden;}
-    #root{height:100%;overflow-y:auto;-webkit-overflow-scrolling:touch;}
-    body{padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bottom);}
-  </style>
-  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
-  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no"/>
+<meta name="mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+<meta name="apple-mobile-web-app-title" content="QuestLife"/>
+<meta name="theme-color" content="#2D4A1E"/>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet"/>
+<title>QuestLife</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
+html,body{height:100%;background:#1A2E0A;overflow:hidden;}
+#root{height:100%;overflow-y:auto;-webkit-overflow-scrolling:touch;}
+body{padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bottom);}
+</style>
+<script src="https://unpkg.com/react@18.2.0/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18.2.0/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone@7.24.0/babel.min.js"></script>
 </head>
 <body>
-  <div id="root"></div>
-  <script type="text/babel" data-presets="react">
-    const { useState, useRef, useEffect } = React;
-
-// Google Fonts
-if (!document.getElementById("pf2")) {
-  const l = document.createElement("link");
-  l.id = "pf2"; l.rel = "stylesheet";
-  l.href = "https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap";
-  document.head.appendChild(l);
-}
-
-// PWA用メタタグ（スマホのホーム画面追加対応）
-if (!document.getElementById("pwa-meta")) {
-  const metas = [
-    { name:"viewport",        content:"width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" },
-    { name:"mobile-web-app-capable", content:"yes" },
-    { name:"apple-mobile-web-app-capable", content:"yes" },
-    { name:"apple-mobile-web-app-status-bar-style", content:"black-translucent" },
-    { name:"apple-mobile-web-app-title", content:"QuestLife" },
-    { name:"theme-color",     content:"#2D4A1E" },
-  ];
-  metas.forEach((m, i) => {
-    const el = document.createElement("meta");
-    el.name = m.name; el.content = m.content;
-    if (i === 0) el.id = "pwa-meta";
-    document.head.appendChild(el);
-  });
-  // タイトル
-  document.title = "QuestLife";
-}
+<div id="root"></div>
+<script type="text/babel" data-presets="react" data-type="module">
+const useState = React.useState;
+const useRef = React.useRef;
+const useEffect = React.useEffect;
 
 const PX = { fontFamily:"'Press Start 2P',monospace" };
 
@@ -535,55 +509,37 @@ const SCENES = [
 ];
 const SCENE_DURATION = 8000;
 
-// シーンをSVG文字列としてレンダリング（React外でDOM直接操作するため）
-function renderSceneToString(SceneComponent, offset) {
-  // 各シーンのSVG要素をJSX→文字列変換は複雑なので
-  // offsetをdata属性として渡し、SVG内のtransformで制御する方式を使用
-  return offset;
-}
-
 function AnimatedLandscape({ onSceneChange }) {
   const [sceneIdx, setSceneIdx] = useState(0);
   const [nextSceneIdx, setNextSceneIdx] = useState(null);
-  const [crossfade, setCrossfade] = useState(false); // クロスフェード中か
-  // offsetはrefで管理→setStateを呼ばずDOMを直接更新
-  const offsetRef = useRef(0);
-  const svgGroupRef = useRef(null); // SVG内のtranslateグループ
+  const [crossfade, setCrossfade] = useState(false);
+  const [offset, setOffset] = useState(0);
   const rafRef = useRef(null);
   const lastTimeRef = useRef(null);
   const sceneIdxRef = useRef(0);
-  const containerRef = useRef(null);
+  const crossfadeTimerRef = useRef(null);
 
-  // rAF: Reactのstateを更新せずSVGのtransformを直接書き換え
   useEffect(() => {
     const animate = (ts) => {
       if (lastTimeRef.current === null) lastTimeRef.current = ts;
       const dt = Math.min(ts - lastTimeRef.current, 50);
       lastTimeRef.current = ts;
       const speed = SCENES[sceneIdxRef.current].speed;
-      offsetRef.current = (offsetRef.current + speed * dt * 0.05) % 960;
-      // シーン内部は [0, w].map で2枚並列しoffset propで制御している
-      // 外側groupのtranslateでスクロール位置を直接制御
-      if (svgGroupRef.current) {
-        svgGroupRef.current.setAttribute('transform', `translate(${-offsetRef.current},0)`);
-      }
+      setOffset(prev => (prev + speed * dt * 0.05) % 960);
       rafRef.current = requestAnimationFrame(animate);
     };
     rafRef.current = requestAnimationFrame(animate);
     return () => cancelAnimationFrame(rafRef.current);
   }, []);
 
-  // シーン切替: クロスフェード演出
-  const crossfadeTimerRef = useRef(null);
   useEffect(() => {
     const timer = setInterval(() => {
       const next = (sceneIdxRef.current + 1) % SCENES.length;
       setNextSceneIdx(next);
       setCrossfade(true);
-      // refで管理してアンマウント時にクリア可能にする
       crossfadeTimerRef.current = setTimeout(() => {
         sceneIdxRef.current = next;
-        offsetRef.current = 0;
+        setOffset(0);
         lastTimeRef.current = null;
         setSceneIdx(next);
         setNextSceneIdx(null);
@@ -601,8 +557,7 @@ function AnimatedLandscape({ onSceneChange }) {
   const NextScene = nextSceneIdx !== null ? SCENES[nextSceneIdx].Component : null;
 
   return (
-    <div ref={containerRef} style={{ position:"relative", lineHeight:0, overflow:"hidden" }}>
-      {/* レスポンシブSVG */}
+    <div style={{ position:"relative", lineHeight:0, overflow:"hidden" }}>
       <svg
         viewBox="0 0 960 80"
         style={{
@@ -616,13 +571,9 @@ function AnimatedLandscape({ onSceneChange }) {
         }}
         xmlns="http://www.w3.org/2000/svg"
       >
-        {/* ref付きgroupをrAFで直接translate更新 → Reactのre-renderなし */}
-        <g ref={svgGroupRef} transform="translate(0,0)">
-          <CurrentScene offset={0}/>
-        </g>
+        <CurrentScene offset={offset}/>
       </svg>
 
-      {/* クロスフェード用の次シーン */}
       {NextScene && (
         <svg
           viewBox="0 0 960 80"
@@ -639,7 +590,6 @@ function AnimatedLandscape({ onSceneChange }) {
         </svg>
       )}
 
-      {/* シーンドット */}
       <div style={{
         position:"absolute", bottom:4, left:"50%", transform:"translateX(-50%)",
         display:"flex", gap:4,
@@ -1180,8 +1130,8 @@ function getAnonId() {
 }
 async function supabaseLoad() {
   try {
-    const res = await fetch(`${SUPABASE_URL}/rest/v1/user_data?user_id=eq.${encodeURIComponent(getAnonId())}&select=data`,
-      { headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${SUPABASE_KEY}` } });
+    const res = await fetch(SUPABASE_URL + "/rest/v1/user_data?user_id=eq." + encodeURIComponent(getAnonId()) + "&select=data",
+      { headers: { "apikey": SUPABASE_KEY, "Authorization": "Bearer " + SUPABASE_KEY } });
     if (!res.ok) return null;
     const rows = await res.json();
     return rows.length > 0 ? rows[0].data : null;
@@ -1189,13 +1139,14 @@ async function supabaseLoad() {
 }
 async function supabaseSave(data) {
   try {
-    await fetch(`${SUPABASE_URL}/rest/v1/user_data`, {
+    await fetch(SUPABASE_URL + "/rest/v1/user_data", {
       method: "POST",
-      headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates" },
+      headers: { "apikey": SUPABASE_KEY, "Authorization": "Bearer " + SUPABASE_KEY, "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates" },
       body: JSON.stringify({ user_id: getAnonId(), data: data, updated_at: new Date().toISOString() }),
     });
   } catch(e) {}
 }
+
 function App() {
   const [data, setData] = useState(() => {
     const d = load();
@@ -1226,23 +1177,23 @@ function App() {
   // 今日分のXP計算（トースト表示用）
 
   const syncDoneRef = useRef(false);
-  useEffect(() => {
+  useEffect(function() {
     if (syncDoneRef.current) return;
     syncDoneRef.current = true;
-    supabaseLoad().then(cloudData => {
+    supabaseLoad().then(function(cloudData) {
       if (!cloudData) return;
       if (!cloudData.categories) cloudData.categories = DEFAULT_CATS;
       if (!cloudData.history)    cloudData.history    = {};
       const localCount = Object.keys(data.history || {}).length;
       const cloudCount = Object.keys(cloudData.history || {}).length;
       if (cloudCount > localCount) {
-        // dataごと更新（todayCheckedは自動再導出される）
         setData(cloudData);
         localStorage.setItem("questTracker_v6", JSON.stringify(cloudData));
         showToast("☁️ クラウドから復元しました");
       }
     });
   }, []);
+
   function calcTodayXP(checked, categories) {
     const dc = categories.find(c => c.id === "daily");
     let xp = 0;
@@ -1501,9 +1452,10 @@ function App() {
   );
 }
 
-    ReactDOM.createRoot(document.getElementById('root')).render(
-      React.createElement(React.StrictMode, null, React.createElement(App, null))
-    );
-  </script>
+
+const rootEl = document.getElementById("root");
+const root = ReactDOM.createRoot(rootEl);
+root.render(React.createElement(App));
+</script>
 </body>
 </html>
