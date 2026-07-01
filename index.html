@@ -102,6 +102,7 @@ const C = {
   tech:"#6C3483", techBg:"#F5EEF8",
   creative:"#B03A7A", creativeBg:"#FDEEF6",
   social:"#D4750A", socialBg:"#FEF5E7",
+  recovery:"#2E4A8A", recoveryBg:"#EAEEFA",
   daily:"#1E6B2E", dailyBg:"#EAFAF1",
   xpColor:"#1A5276", gold:"#D4AC0D",
   green:"#1E6B2E", red:"#B03000",
@@ -646,10 +647,6 @@ function getCatLv(xp) {
 const DEFAULT_CATS = [
   { id:"physical", label:"体力", icon:"⚔️", color:C.physical, bg:C.physicalBg, missions:[
     { id:"gym",    label:"ジムで筋トレ",   xp:10 },
-    { id:"sleep5", label:"睡眠5時間以下", xp:-10, penalty:true },
-    { id:"sleep7", label:"睡眠7時間達成", xp:10 },
-    { id:"sleep8", label:"睡眠8時間達成", xp:20 },
-    { id:"sleep9", label:"睡眠9時間達成", xp:30 },
   ]},
   { id:"knowledge", label:"知識", icon:"📖", color:C.knowledge, bg:C.knowledgeBg, missions:[
     { id:"read_novel", label:"読書15分（小説）", xp:10 },
@@ -670,6 +667,14 @@ const DEFAULT_CATS = [
     { id:"outing",      label:"家族・友人と出かける", xp:20 },
     { id:"event",       label:"イベント参加",       xp:30 },
   ]},
+  { id:"recovery", label:"回復", icon:"🌙", color:C.recovery, bg:C.recoveryBg, missions:[
+    { id:"bath_done",   label:"入浴完了",           xp:10 },
+    { id:"phone_charge",label:"スマホ充電完了",       xp:10 },
+    { id:"sleep_declare",label:"就寝宣言",           xp:15 },
+    { id:"sleep_declare_bonus", label:"早寝ボーナス（23:45までに就寝宣言）", xp:15, hidden:true },
+    { id:"sleep_7h",        label:"7時間以上眠れた（起床後）", xp:20 },
+    { id:"sleep_short",     label:"睡眠5時間以下だった",       xp:-10, penalty:true },
+  ]},
   { id:"daily", label:"毎日", icon:"🌿", color:C.daily, bg:C.dailyBg,
     missions:[
       { id:"water",   label:"水・お茶500ml以上",   xp:0, dailyPart:true },
@@ -680,7 +685,21 @@ const DEFAULT_CATS = [
   },
 ];
 
-const SLEEP_IDS = ["sleep5","sleep7","sleep8","sleep9"];
+const SLEEP_IDS = ["sleep_short","sleep_7h"];
+
+// 就寝宣言の時刻ボーナス判定：m.timeBonus.beforeより前にタップしていればtrue
+// 18:00〜boundary（例 23:45）の間にタップした場合のみ「早寝」とみなす。
+// 0:00〜早朝のタップは「日付をまたいでからの申告」とみなしボーナス対象外。
+function checkTimeBonus(mission) {
+  if (!mission.timeBonus) return false;
+  const now = new Date();
+  const [bh, bm] = mission.timeBonus.before.split(":").map(Number);
+  const nowH = now.getHours(), nowM = now.getMinutes();
+  const nowMinutes = nowH * 60 + nowM;
+  const boundaryMinutes = bh * 60 + bm; // 例: 23:45 → 1425分
+  const eveningStartMinutes = 18 * 60; // 18:00
+  return nowMinutes >= eveningStartMinutes && nowMinutes <= boundaryMinutes;
+}
 const SKEY = "questTracker_v6"; // バージョン更新で旧データと分離
 
 // ローカルタイムゾーン基準で日付キーを生成（UTC基準だと深夜0:00〜9:00台にJSTでズレるため）
@@ -1126,7 +1145,7 @@ function EditModal({ categories, onSave, onClose }) {
           ))}
         </div>
         <div style={{ flex:1,overflowY:"auto",padding:14 }}>
-          {activeCat && activeCat.missions.filter(m=>!m.dailyPart).map(m=>(
+          {activeCat && activeCat.missions.filter(m=>!m.dailyPart&&!m.hidden).map(m=>(
             <div key={m.id} style={{ display:"flex",alignItems:"center",gap:8,marginBottom:8,...pb(C.borderLight,C.panelAlt),padding:"8px 10px" }}>
               <div style={{ flex:1 }}>
                 <input value={m.label} onChange={e=>upd(activeCat.id,m.id,"label",e.target.value)} style={{ ...inp,marginBottom:4 }}/>
@@ -1255,8 +1274,21 @@ function App() {
       }
     }
     const newChecked = { ...todayChecked };
-    if (alreadyChecked) { delete newChecked[missionId]; }
-    else { newChecked[missionId] = true; }
+    if (alreadyChecked) {
+      delete newChecked[missionId];
+      // 就寝宣言を取り消したら、連動する早寝ボーナスも取り消す
+      if (missionId === "sleep_declare") delete newChecked["sleep_declare_bonus"];
+    } else {
+      newChecked[missionId] = true;
+      // 就寝宣言時、23:45までのタップなら早寝ボーナスも同時に付与
+      if (missionId === "sleep_declare") {
+        const recoveryCat = data.categories.find(c => c.id === "recovery");
+        const bonusMission = recoveryCat?.missions.find(m => m.id === "sleep_declare_bonus");
+        if (bonusMission && checkTimeBonus({ timeBonus:{ before:"23:45" } })) {
+          newChecked["sleep_declare_bonus"] = true;
+        }
+      }
+    }
 
     const dc = data.categories.find(c => c.id === "daily");
     const prevDailyDone = dc?.missions.length > 0 && dc.missions.every(m => !!todayChecked[m.id]);
@@ -1270,6 +1302,9 @@ function App() {
       showToast(`🌿 毎日ボーナス! +${dc?.bonus||10}XP`);
     } else if (alreadyChecked) {
       soundUncheck();
+    } else if (missionId === "sleep_declare" && newChecked["sleep_declare_bonus"]) {
+      soundDailyBonus();
+      showToast(`🌙 早寝ボーナス! +${diff}XP`);
     } else if (xp < 0) {
       soundPenalty();
       showToast(`${diff}XP`);
@@ -1360,7 +1395,7 @@ function App() {
                     <span style={{ fontSize:9,color:cat.color }}>{cat.label}</span>
                     {cat.bonus&&<span style={{ marginLeft:"auto",fontSize:7,color:allDaily?C.green:C.textMuted }}>{allDaily?"✓ ":""}全達成+{cat.bonus}XP</span>}
                   </div>
-                  {cat.missions.map(m=>{
+                  {cat.missions.filter(m=>!m.hidden).map(m=>{
                     const checked = todayChecked[m.id]!==undefined;
                     return (
                       <button key={m.id} onClick={()=>handleCheck(m.id,m.xp,!!m.dailyPart)} style={{
@@ -1376,7 +1411,14 @@ function App() {
                         <div style={{ width:18,height:18,flexShrink:0,border:`2px solid ${checked?cat.color:C.border}`,background:checked?cat.color:C.white,display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,color:C.white }}>
                           {checked&&"✓"}
                         </div>
-                        <span style={{ flex:1,color:checked?cat.color:C.text,textDecoration:checked?"line-through":"none",lineHeight:1.7 }}>{m.label}</span>
+                        <span style={{ flex:1,color:checked?cat.color:C.text,textDecoration:checked?"line-through":"none",lineHeight:1.7 }}>
+                          {m.label}
+                          {m.id==="sleep_declare"&&(
+                            <span style={{ display:"block",fontSize:6,color:todayChecked["sleep_declare_bonus"]?"#2E4A8A":C.textLight,marginTop:1 }}>
+                              {todayChecked["sleep_declare_bonus"]?"🌙 早寝ボーナス獲得！":"23:45までにタップで +15XP ボーナス"}
+                            </span>
+                          )}
+                        </span>
                         {!m.dailyPart&&<span style={{ fontSize:8,fontWeight:"bold",flexShrink:0,color:m.penalty?C.red:C.green }}>{m.xp>0?`+${m.xp}`:m.xp}</span>}
                       </button>
                     );
